@@ -1,0 +1,38 @@
+[package]
+name = "conductor"
+version = "0.1.0"
+authors = ["Joe Bellus <joe@5sigma.io>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name="conductor"
+path="src/lib/mod.rs"
+
+
+[dependencies]
+git2 = "0.11"
+clap = "2.33.0"
+ansi_term = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.8"
+timeout-readwrite = "0.1"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
