@@ -41,11 +41,10 @@ fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf
         cmd.env(k, v);
     }
     let dir = component
-        .start
         .clone()
+        .start
         .dir
-        .unwrap_or(component.get_path())
-        .clone();
+        .unwrap_or_else(|| component.get_path());
     root_path.push(dir);
     cmd.current_dir(root_path);
     cmd
@@ -56,7 +55,7 @@ fn spawn_component(
     data_tx: Sender<ComponentMessage>,
     root_path: &PathBuf,
 ) -> Result<Worker, Error> {
-    let data_tx = data_tx.clone();
+    let data_tx = data_tx;
     let (tx, rx) = mpsc::channel();
     let c = component.clone();
     let rp = root_path.clone();
@@ -68,10 +67,9 @@ fn spawn_component(
             }
             let stdout_result: Result<std::process::ChildStdout, io::Error> =
                 cmd.stdout(Stdio::piped()).spawn().and_then(|mut child| {
-                    child.stdout.take().ok_or(Error::new(
-                        ErrorKind::Other,
-                        "Could not create process pipe",
-                    ))
+                    child.stdout.take().ok_or_else(|| {
+                        Error::new(ErrorKind::Other, "Could not create process pipe")
+                    })
                 });
             match stdout_result {
                 Ok(stdout) => {
@@ -101,7 +99,7 @@ fn spawn_component(
                     println!("{}", e);
                 }
             };
-            if c.retry == false {
+            if !c.retry {
                 break;
             }
             ui::system_message(format!(
@@ -127,10 +125,10 @@ pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
         .stdout(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child.stdout.take().ok_or(Error::new(
-                ErrorKind::Other,
-                "Could not create process pipe",
-            ))
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| Error::new(ErrorKind::Other, "Could not create process pipe"))
         })
         .and_then(|stdout| Ok(BufReader::new(stdout).lines()))
     {
@@ -165,8 +163,8 @@ pub fn clone_repo(component: Component, root_path: &PathBuf) -> Result<(), Error
     let mut fetch_options = FetchOptions::new();
 
     callbacks.credentials(|_, _, _| {
-        let user: String = env::var("GIT_USER").unwrap_or("".into());
-        let pass: String = env::var("GIT_PAT").unwrap_or("".into());
+        let user: String = env::var("GIT_USER").unwrap_or_else(|_| "".into());
+        let pass: String = env::var("GIT_PAT").unwrap_or_else(|_| "".into());
         Cred::userpass_plaintext(&user, &pass)
     });
 
@@ -184,7 +182,7 @@ pub fn clone_repo(component: Component, root_path: &PathBuf) -> Result<(), Error
     }
 }
 
-pub fn run_project(fname: &PathBuf, tags: Option<Vec<String>>) {
+pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
     let mut fname = fname.clone();
     match Project::load(&fname) {
         Err(e) => {
@@ -197,11 +195,10 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<String>>) {
             let components = match tags {
                 Some(t) => project
                     .components
-                    .clone()
                     .into_iter()
-                    .filter({ |x| x.has_tag(t.clone()) })
+                    .filter({ |x| x.has_tag(&t.clone()) })
                     .collect(),
-                None => project.components.clone(),
+                None => project.components,
             };
 
             fname.pop();

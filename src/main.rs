@@ -70,11 +70,8 @@ fn main() {
 
     match find_config(&config_file) {
         Some(config_fp) => {
-            let tags: Option<Vec<String>> = match matches.value_of("tags") {
-                Some(tags_r) => {
-                    let tags: String = String::from(tags_r);
-                    Some(tags.split(",").map(|i| String::from(i)).collect())
-                }
+            let tags: Option<Vec<&str>> = match matches.value_of("tags") {
+                Some(tags_r) => Some(tags_r.split(',').map(|i| i).collect()),
                 _ => None,
             };
 
@@ -88,13 +85,13 @@ fn main() {
     };
 }
 
-fn find_config(config: &String) -> Option<PathBuf> {
+fn find_config(config: &str) -> Option<PathBuf> {
     env::current_dir()
         .and_then(|dir| Ok(find_file(&dir, config)))
         .unwrap_or(None)
 }
 
-fn find_file(starting_directory: &Path, filename: &String) -> Option<PathBuf> {
+fn find_file(starting_directory: &Path, filename: &str) -> Option<PathBuf> {
     let mut path: PathBuf = starting_directory.into();
     let file = Path::new(&filename);
 
