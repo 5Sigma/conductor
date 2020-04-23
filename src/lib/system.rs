@@ -1,15 +1,13 @@
 use crate::{ui, Component, Project};
 
-use git2::build::RepoBuilder;
-use git2::{Cred, FetchOptions, RemoteCallbacks};
+use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, Error, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
-use std::{env, fs, io};
 // use timeout_readwrite::TimeoutReader;
 
 #[derive(Debug)]
@@ -29,7 +27,6 @@ struct Worker {
 }
 
 fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
-    let mut root_path = root_path.clone();
     let mut cmd = Command::new(&c.command);
     c.args.iter().for_each(|a| {
         cmd.arg(a);
@@ -44,7 +41,8 @@ fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf
         .clone()
         .start
         .dir
-        .unwrap_or_else(|| component.get_path());
+        .unwrap_or_else(|| component.get_path().to_str().unwrap_or("").into());
+    let mut root_path = root_path.clone();
     root_path.push(dir);
     cmd.current_dir(root_path);
     cmd
@@ -142,48 +140,7 @@ pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
     }
 }
 
-pub fn clone_repo(component: Component, root_path: &PathBuf) -> Result<(), Error> {
-    let mut root_path = root_path.clone();
-    if Path::new(&component.get_path()).exists() {
-        return Result::Err(Error::new(
-            ErrorKind::Other,
-            format!("Directory already exists at {}", component.get_path()),
-        ));
-    }
-    fs::create_dir_all(component.get_path())?;
-    ui::system_message(format!(
-        "Cloning {} from {} into {}",
-        component.clone().name,
-        component.clone().repo,
-        component.get_path(),
-    ));
-
-    let mut builder = RepoBuilder::new();
-    let mut callbacks = RemoteCallbacks::new();
-    let mut fetch_options = FetchOptions::new();
-
-    callbacks.credentials(|_, _, _| {
-        let user: String = env::var("GIT_USER").unwrap_or_else(|_| "".into());
-        let pass: String = env::var("GIT_PAT").unwrap_or_else(|_| "".into());
-        Cred::userpass_plaintext(&user, &pass)
-    });
-
-    fetch_options.remote_callbacks(callbacks);
-    builder.fetch_options(fetch_options);
-
-    root_path.push(component.get_path());
-
-    match builder.clone(&component.repo, &root_path) {
-        Ok(_) => Ok(()),
-        Err(e) => Result::Err(Error::new(
-            ErrorKind::Other,
-            format!("Could not clone repository: {}", e),
-        )),
-    }
-}
-
 pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
-    let mut fname = fname.clone();
     match Project::load(&fname) {
         Err(e) => {
             ui::system_error("Could not load project".into());
@@ -191,6 +148,8 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
         }
         Ok(project) => {
             let (tx, rx) = mpsc::channel();
+            let mut root_path = fname.clone();
+            root_path.pop();
 
             let components = match tags {
                 Some(t) => project
@@ -201,10 +160,8 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
                 None => project.components,
             };
 
-            fname.pop();
-
             for c in components.iter() {
-                match spawn_component(c.clone(), tx.clone(), &fname) {
+                match spawn_component(c.clone(), tx.clone(), &root_path) {
                     Ok(_) => ui::system_message(format!("Started {}", c.name)),
                     Err(e) => ui::system_error(format!("Failed to start {}: {}", c.name, e)),
                 }
@@ -219,22 +176,23 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
 }
 
 pub fn setup_project(fname: &PathBuf) {
-    let mut fname = fname.clone();
     match Project::load(&fname) {
         Err(e) => {
             ui::system_error("Could not load project".into());
             println!("{}", e);
         }
-
         Ok(project) => {
-            fname.pop();
+            let mut root_path = fname.clone();
+            root_path.pop();
             for cmp in project.components.into_iter() {
-                match clone_repo(cmp.clone(), &fname) {
+                let mut cmp_path = root_path.clone();
+                cmp_path.push(cmp.get_path());
+                match cmp.clone_repo(&cmp_path) {
                     Ok(_) => ui::system_message(format!("{} cloned", cmp.clone().name)),
                     Err(e) => ui::system_error(format!("Skipping clone: {}", e)),
                 }
                 for cmd in &cmp.init {
-                    run_command(&cmd, &cmp, &fname);
+                    run_command(&cmd, &cmp, &root_path);
                 }
             }
         }

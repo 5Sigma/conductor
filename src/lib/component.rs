@@ -1,6 +1,8 @@
+use crate::git;
 use crate::Command;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Deserialize, PartialEq)]
 pub enum TerminalColor {
@@ -57,7 +59,12 @@ impl Component {
             .any({ |a| tags.iter().any({ |b| a == b }) })
     }
 
-    pub fn get_path(&self) -> String {
-        self.path.clone().unwrap_or_else(|| self.name.clone())
+    pub fn get_path(&self) -> PathBuf {
+        let path_str = self.path.clone().unwrap_or_else(|| self.name.clone());
+        Path::new(&path_str).to_owned()
+    }
+
+    pub fn clone_repo(&self, root_path: &Path) -> Result<(), std::io::Error> {
+        git::clone_repo(&self.repo, root_path).map(|_| ())
     }
 }
