@@ -27,7 +27,7 @@ pub struct Component {
     pub path: Option<String>,
     pub color: TerminalColor,
     pub env: HashMap<String, String>,
-    pub repo: String,
+    pub repo: Option<String>,
     pub delay: Option<u64>,
     pub start: Command,
     pub init: Vec<Command>,
@@ -41,7 +41,7 @@ impl Default for Component {
             name: "Unknown".into(),
             path: None,
             env: HashMap::new(),
-            repo: "".into(),
+            repo: None,
             color: TerminalColor::Yellow,
             delay: None,
             start: Command::default(),
@@ -65,6 +65,12 @@ impl Component {
     }
 
     pub fn clone_repo(&self, root_path: &Path) -> Result<(), std::io::Error> {
-        git::clone_repo(&self.repo, root_path).map(|_| ())
+        match &self.repo {
+            Some(repo) => git::clone_repo(&repo, root_path).map(|_| ()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Repo not specified",
+            )),
+        }
     }
 }
