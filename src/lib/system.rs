@@ -175,6 +175,37 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
     };
 }
 
+pub fn run_component(fname: &PathBuf, component_name: &str) {
+    let mut fname = fname.clone();
+    match Project::load(&fname) {
+        Err(e) => {
+            ui::system_error("Could not load project".into());
+            println!("{}", e)
+        }
+        Ok(project) => {
+            let (tx, rx) = mpsc::channel();
+            fname.pop();
+
+            if let Some(c) = project
+                .components
+                .into_iter()
+                .find(|x| x.name == component_name)
+            {
+                match spawn_component(c.clone(), tx.clone(), &fname) {
+                    Ok(_) => ui::system_message(format!("Started {}", c.name)),
+                    Err(e) => ui::system_error(format!("Failed to start {}: {}", c.name, e)),
+                }
+                loop {
+                    let msg = rx.recv().unwrap();
+                    ui::component_message(&msg.component, msg.body);
+                }
+            } else {
+                ui::system_error(format!("Could not find component: {}", component_name))
+            }
+        }
+    }
+}
+
 pub fn setup_project(fname: &PathBuf) {
     match Project::load(&fname) {
         Err(e) => {

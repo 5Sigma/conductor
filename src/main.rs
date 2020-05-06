@@ -1,5 +1,5 @@
 use clap::{App, Arg, SubCommand};
-use conductor::{run_project, setup_project, ui};
+use conductor::{run_component, run_project, setup_project, ui};
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -57,6 +57,11 @@ fn main() {
             .value_name("TAG1,TAG2")
             .takes_value(true),
         )
+        .arg(
+            Arg::with_name("component")
+                .index(1)
+                .help("a specific component to execute")
+        )
         .alias("play")
         .alias("start"),
     )
@@ -77,7 +82,13 @@ fn main() {
 
             match matches.subcommand() {
                 ("setup", _) => setup_project(&config_fp),
-                ("run", _) => run_project(&config_fp, tags),
+                ("run", Some(m)) => {
+                    if let Some(cmp) = m.value_of("component") {
+                        run_component(&config_fp, cmp)
+                    } else {
+                        run_project(&config_fp, tags);
+                    }
+                }
                 _ => run_project(&config_fp, tags),
             };
         }
