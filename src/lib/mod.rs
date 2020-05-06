@@ -1,5 +1,6 @@
 mod command;
 mod component;
+mod git;
 mod project;
 mod system;
 pub mod ui;

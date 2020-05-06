@@ -24,9 +24,9 @@ impl Project {
 
 impl Default for Project {
     fn default() -> Self {
-        return Project {
+        Project {
             name: "Unnamed Project".into(),
             components: vec![],
-        };
+        }
     }
 }
