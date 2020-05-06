@@ -191,7 +191,7 @@ pub fn run_component(fname: &PathBuf, component_name: &str) {
                 .into_iter()
                 .find(|x| x.name == component_name)
             {
-                match spawn_component(c.clone(), tx.clone(), &fname) {
+                match spawn_component(c.clone(), tx, &fname) {
                     Ok(_) => ui::system_message(format!("Started {}", c.name)),
                     Err(e) => ui::system_error(format!("Failed to start {}: {}", c.name, e)),
                 }
