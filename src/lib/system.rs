@@ -220,11 +220,13 @@ pub fn setup_project(fname: &PathBuf) {
         let mut cmp_path = root_path.clone();
         cmp_path.push(cmp.get_path());
         match cmp.clone_repo(&cmp_path) {
-          Ok(_) => ui::system_message(format!("{} cloned", cmp.clone().name)),
+          Ok(_) => {
+            ui::system_message(format!("{} cloned", cmp.clone().name));
+            for cmd in &cmp.init {
+              run_command(&cmd, &cmp, &root_path);
+            }
+          }
           Err(e) => ui::system_error(format!("Skipping clone: {}", e)),
-        }
-        for cmd in &cmp.init {
-          run_command(&cmd, &cmp, &root_path);
         }
       }
     }
@@ -233,7 +235,7 @@ pub fn setup_project(fname: &PathBuf) {
 
 pub fn get_components(fname: &PathBuf) -> Vec<Component> {
   match Project::load(&fname) {
-    Err(e) => {
+    Err(_) => {
       ui::system_error("Could not load project".into());
       vec![]
     }
