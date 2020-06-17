@@ -93,6 +93,7 @@ fn main() {
     "conductor.yml".into()
   };
 
+  // Dynamic subcommands
   match find_config(&config_file) {
     Some(config_fp) => {
       let tags: Option<Vec<&str>> = match matches.value_of("tags") {
@@ -140,7 +141,6 @@ fn find_file(starting_directory: &Path, filename: &str) -> Option<PathBuf> {
     }
 
     if !(path.pop() && path.pop()) {
-      // remove file && remove parent
       break None;
     }
   }
