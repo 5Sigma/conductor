@@ -100,6 +100,12 @@ fn main() {
         _ => None,
       };
 
+      let cmps = get_components(&config_fp);
+      if let Some(direct_cmp) = cmps.iter().find(|x| x.name == matches.subcommand().0) {
+        run_component(&config_fp, &direct_cmp.name);
+        return;
+      }
+
       match matches.subcommand() {
         ("setup", _) => setup_project(&config_fp),
         ("run", Some(m)) => {
