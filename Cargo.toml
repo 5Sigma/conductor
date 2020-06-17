@@ -1,6 +1,6 @@
 [package]
 name = "conductor"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Joe Bellus <joe@5sigma.io>"]
 edition = "2018"
 
