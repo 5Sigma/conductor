@@ -54,10 +54,7 @@ impl Default for Component {
 
 impl Component {
   pub fn has_tag(&self, tags: &[&str]) -> bool {
-    self
-      .tags
-      .iter()
-      .any({ |a| tags.iter().any({ |b| a == b }) })
+    self.tags.iter().any(|a| tags.iter().any(|b| a == b))
   }
 
   pub fn get_path(&self) -> PathBuf {
