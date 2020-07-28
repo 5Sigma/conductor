@@ -1,5 +1,4 @@
 use crate::{ui, Component, Project};
-
 use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, Error, ErrorKind};
@@ -27,15 +26,23 @@ struct Worker {
 }
 
 fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
-  let mut cmd = Command::new(&c.command);
+  let mut cmd = Command::new(
+    expand_str::expand_string_with_env(&c.command).unwrap_or_else(|_| c.command.clone()),
+  );
   c.args.iter().for_each(|a| {
-    cmd.arg(a);
+    cmd.arg(expand_str::expand_string_with_env(a).unwrap_or_else(|_| a.clone()));
   });
   for (k, v) in &c.env {
-    cmd.env(k, v);
+    cmd.env(
+      k,
+      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
+    );
   }
   for (k, v) in &component.env {
-    cmd.env(k, v);
+    cmd.env(
+      k,
+      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
+    );
   }
   let dir = component
     .clone()
@@ -43,7 +50,7 @@ fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf
     .dir
     .unwrap_or_else(|| component.get_path().to_str().unwrap_or("").into());
   let mut root_path = root_path.clone();
-  root_path.push(dir);
+  root_path.push(&expand_str::expand_string_with_env(&dir).unwrap_or_else(|_| dir.clone()));
   cmd.current_dir(root_path);
   cmd
 }
@@ -156,7 +163,7 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
         Some(t) => project
           .components
           .into_iter()
-          .filter({ |x| x.has_tag(&t.clone()) })
+          .filter(|x| x.has_tag(&t.clone()))
           .collect(),
         None => project.components,
       };
