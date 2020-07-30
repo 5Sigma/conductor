@@ -4,7 +4,7 @@
 
 Conductor is a simple task runner/launcher. Its goal is to make it easier to launch more complicated stacks in a development environment. Automatically launching backend, front end, and services at once. While also aggregating all their output together into a single process.
 
-Visit (https://conductor.5sigma.io)[https://conductor.5sigma.io] for documentation and information.
+Visit [https://conductor.5sigma.io](https://conductor.5sigma.io) for documentation and information.
 
 ## Installation
 
