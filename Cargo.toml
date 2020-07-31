@@ -12,28 +12,11 @@ path="src/lib/mod.rs"
 
 
 [dependencies]
-git2 = "0.11"
+git2 = "0.13.8"
 clap = "2.33.0"
 ansi_term = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
 timeout-readwrite = "0.1"
 expand_str = "0.1.1"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+rs-docker = "0.0.58"

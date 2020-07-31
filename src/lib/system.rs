@@ -127,6 +127,7 @@ fn spawn_component(
 pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
   let mut cmd = create_command(c, cmp, &root_path);
   ui::system_message(format!("Executing: {}", c));
+
   match cmd
     .stdout(Stdio::piped())
     .spawn()
@@ -199,6 +200,10 @@ pub fn run_component(fname: &PathBuf, component_name: &str) {
         .into_iter()
         .find(|x| x.name == component_name)
       {
+        c.services.iter().for_each(|service_name| {
+          let service = project.service_by_name(service_name.clone());
+        });
+
         match spawn_component(c.clone(), tx, &fname) {
           Ok(_) => ui::system_message(format!("Started {}", c.name)),
           Err(e) => ui::system_error(format!("Failed to start {}: {}", c.name, e)),

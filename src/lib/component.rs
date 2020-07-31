@@ -33,6 +33,7 @@ pub struct Component {
   pub init: Vec<Command>,
   pub tags: Vec<String>,
   pub retry: bool,
+  pub services: Vec<String>,
 }
 
 impl Default for Component {
@@ -48,6 +49,7 @@ impl Default for Component {
       tags: vec![],
       init: vec![],
       retry: true,
+      services: vec![],
     }
   }
 }
