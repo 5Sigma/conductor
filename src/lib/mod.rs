@@ -1,3 +1,5 @@
+extern crate serde;
+
 mod command;
 mod component;
 mod git;
