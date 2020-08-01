@@ -53,6 +53,29 @@ struct Worker {
   pub kill_signal: Sender<()>,
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn start_container(name: &str) -> io::Result<String> {
+  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
+  docker.start_container(name)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn stop_container(name: &str) -> io::Result<String> {
+  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
+  docker.stop_container(name)
+}
+
+#[cfg(target_os = "windows")]
+pub fn start_container(name: &str) -> io::Result<String> {
+  Ok("".into())
+}
+
+#[cfg(target_os = "windows")]
+pub fn stop_container(name: &str) -> io::Result<String> {
+  ui::system_error("Services are not supported on windows".into());
+  Ok("".into())
+}
+
 fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
   let mut cmd = Command::new(
     expand_str::expand_string_with_env(&c.command).unwrap_or_else(|_| c.command.clone()),
@@ -221,7 +244,7 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
   let mut root_path = fname.clone();
   root_path.pop();
 
-  let component_names = match tags {
+  let component_names: Vec<String> = match tags {
     Some(t) => project
       .components
       .into_iter()
@@ -231,29 +254,6 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
     None => project.components.into_iter().map(|x| x.name).collect(),
   };
   run_components(fname, component_names)
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn start_container(name: &str) -> io::Result<String> {
-  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
-  docker.start_container(name)
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn stop_container(name: &str) -> io::Result<String> {
-  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
-  docker.stop_container(name)
-}
-
-#[cfg(target_os = "windows")]
-pub fn start_container(name: &str) -> io::Result<String> {
-  Ok("".into())
-}
-
-#[cfg(target_os = "windows")]
-pub fn stop_container(name: &str) -> io::Result<String> {
-  ui::system_error("Services are not supported on windows".into());
-  Ok("".into())
 }
 
 pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), SystemError> {
