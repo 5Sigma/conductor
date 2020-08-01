@@ -12,6 +12,7 @@ pub enum TerminalColor {
   Purple,
   White,
   Red,
+  Cyan,
 }
 
 impl Default for TerminalColor {

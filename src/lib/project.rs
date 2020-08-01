@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 
-#[derive(Deserialize, PartialEq)]
+#[derive(Deserialize, PartialEq, Clone)]
 pub struct Project {
   #[serde(default)]
   pub name: String,
@@ -23,10 +23,10 @@ impl Project {
     Ok(p)
   }
 
-  pub fn service_by_name(&self, name: String) -> Option<Service> {
-    match self.services.iter().find(|s| s.name == name) {
-      Some(s) => return Some(s.clone()),
-      None => return None,
+  pub fn service_by_name(&self, name: &str) -> Option<Service> {
+    match self.services.iter().find(|s| s.name == *name) {
+      Some(s) => Some(s.clone()),
+      None => None,
     }
   }
 }

@@ -20,3 +20,4 @@ serde_yaml = "0.8"
 timeout-readwrite = "0.1"
 expand_str = "0.1.1"
 rs-docker = "0.0.58"
+ctrlc = {version = "3.1.6", feature = ["termination"] }

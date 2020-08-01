@@ -15,6 +15,7 @@ impl Default for ServiceType {
 #[serde(default)]
 pub struct Service {
   pub service_type: ServiceType,
+  pub container: Option<String>,
   pub name: String,
 }
 
@@ -22,6 +23,7 @@ impl Default for Service {
   fn default() -> Self {
     Service {
       name: String::from(""),
+      container: None,
       service_type: ServiceType::default(),
     }
   }
