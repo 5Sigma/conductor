@@ -1,4 +1,5 @@
 use crate::{ui, Component, Project};
+#[cfg(not(target_os = "windows"))]
 use rs_docker::Docker;
 use std::io;
 use std::io::prelude::*;
@@ -175,14 +176,27 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
   };
 }
 
+#[cfg(not(target_os = "windows"))]
 pub fn start_container(name: &str) -> io::Result<String> {
   let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
   docker.start_container(name)
 }
 
+#[cfg(not(target_os = "windows"))]
 pub fn stop_container(name: &str) -> io::Result<String> {
   let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
   docker.stop_container(name)
+}
+
+#[cfg(target_os = "windows")]
+pub fn start_container(name: &str) -> io::Result<String> {
+  Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn stop_container(name: &str) -> io::Result<String> {
+  ui::system_error("Services are not supported on windows".into());
+  Ok(())
 }
 
 pub fn run_component(fname: &PathBuf, component_name: &str) {
