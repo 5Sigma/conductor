@@ -19,6 +19,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
 timeout-readwrite = "0.1"
 expand_str = "0.1.1"
-ctrlc = {version = "3.1.6", feature = ["termination"] }
+ctrlc = {version = "3.1.6"}
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 rs-docker = "0.0.58"

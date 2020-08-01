@@ -2,13 +2,8 @@ use clap::{App, Arg, SubCommand};
 use conductor::{get_components, run_component, run_components, run_project, setup_project, ui};
 use std::env;
 use std::path::{Path, PathBuf};
-// use std::sync::mpsc::{self, Receiver};
 
 fn main() {
-  // ctrlc::set_handler(move || {
-  //   ui::system_message("Shutting down".into());
-  // })
-  // .expect("Could not setup handler");
   let version = format!(
     "{}.{}.{}{}",
     env!("CARGO_PKG_VERSION_MAJOR"),
@@ -124,7 +119,7 @@ fn main() {
             .into_iter()
             .map(|c| String::from(c))
             .collect();
-          if components.len() > 0 {
+          if !components.is_empty() {
             if let Err(e) = run_components(&config_fp, components) {
               ui::system_error(format!("{}", e))
             }
