@@ -25,6 +25,7 @@ pub fn component_message(cmp: &Component, msg: String) {
     TerminalColor::Green => format!("{}", Green.bold().paint(&cmp.name)),
     TerminalColor::Purple => format!("{}", Purple.bold().paint(&cmp.name)),
     TerminalColor::Yellow => format!("{}", Yellow.bold().paint(&cmp.name)),
+    TerminalColor::Cyan => format!("{}", Cyan.bold().paint(&cmp.name)),
   };
   let l_bracket = White.bold().paint("[");
   let r_bracket = White.bold().paint("]");

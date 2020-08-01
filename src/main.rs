@@ -1,9 +1,16 @@
 use clap::{App, Arg, SubCommand};
-use conductor::{get_components, run_component, run_project, setup_project, ui};
+use conductor::{
+  get_components, run_component, run_project, setup_project, shutdown_component_services,
+  shutdown_project_services, ui,
+};
 use std::env;
 use std::path::{Path, PathBuf};
 
 fn main() {
+  ctrlc::set_handler(move || {
+    ui::system_message("Shutting down".into());
+  })
+  .expect("Could not setup handler");
   let version = format!(
     "{}.{}.{}{}",
     env!("CARGO_PKG_VERSION_MAJOR"),
@@ -104,6 +111,7 @@ fn main() {
       let cmps = get_components(&config_fp);
       if let Some(direct_cmp) = cmps.iter().find(|x| x.name == matches.subcommand().0) {
         run_component(&config_fp, &direct_cmp.name);
+        shutdown_component_services(&config_fp, &direct_cmp.name);
         return;
       }
 
@@ -111,12 +119,17 @@ fn main() {
         ("setup", _) => setup_project(&config_fp),
         ("run", Some(m)) => {
           if let Some(cmp) = m.value_of("component") {
-            run_component(&config_fp, cmp)
+            run_component(&config_fp, cmp);
+            shutdown_component_services(&config_fp, cmp);
           } else {
-            run_project(&config_fp, tags);
+            run_project(&config_fp, tags.clone());
+            shutdown_project_services(&config_fp, tags);
           }
         }
-        _ => run_project(&config_fp, tags),
+        _ => {
+          run_project(&config_fp, tags.clone());
+          shutdown_project_services(&config_fp, tags);
+        }
       };
     }
     None => ui::system_error(format!("Could not find config file {}", config_file)),
@@ -125,7 +138,7 @@ fn main() {
 
 fn find_config(config: &str) -> Option<PathBuf> {
   env::current_dir()
-    .and_then(|dir| Ok(find_file(&dir, config)))
+    .map(|dir| find_file(&dir, config))
     .unwrap_or(None)
 }
 
