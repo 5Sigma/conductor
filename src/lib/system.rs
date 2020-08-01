@@ -76,6 +76,19 @@ pub fn stop_container(name: &str) -> io::Result<String> {
   Ok("".into())
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
+  Box::new(BufReader::new(timeout_readwrite::TimeoutReader::new(
+    out,
+    Duration::new(1, 0),
+  )))
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
+  Box::new(BufReader::new(stdout));
+}
+
 fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
   let mut cmd = Command::new(
     expand_str::expand_string_with_env(&c.command).unwrap_or_else(|_| c.command.clone()),
@@ -150,10 +163,7 @@ fn spawn_component(
         .ok_or_else(|| SystemError::new("Could not create process pipe"))?;
 
       // let buf = BufReader::new(stdout);
-      let buf = BufReader::new(timeout_readwrite::TimeoutReader::new(
-        stdout,
-        Duration::new(1, 0),
-      ));
+      let buf = get_buff_reader(stdout);
       let _ = buf.lines().try_for_each(|line| match line {
         Ok(body) => {
           let payload = ComponentMessage {
