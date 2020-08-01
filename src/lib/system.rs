@@ -86,7 +86,7 @@ pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
 
 #[cfg(target_os = "windows")]
 pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
-  Box::new(BufReader::new(stdout))
+  Box::new(BufReader::new(out))
 }
 
 fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
