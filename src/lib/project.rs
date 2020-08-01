@@ -22,7 +22,7 @@ impl Project {
       serde_yaml::from_str::<Project>(&config).map_err(|e| Error::new(ErrorKind::Other, e))?;
     Ok(p)
   }
-
+  #[allow(dead_code)]
   pub fn service_by_name(&self, name: &str) -> Option<Service> {
     match self.services.iter().find(|s| s.name == *name) {
       Some(s) => Some(s.clone()),

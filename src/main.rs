@@ -1,16 +1,14 @@
 use clap::{App, Arg, SubCommand};
-use conductor::{
-  get_components, run_component, run_project, setup_project, shutdown_component_services,
-  shutdown_project_services, ui,
-};
+use conductor::{get_components, run_component, run_components, run_project, setup_project, ui};
 use std::env;
 use std::path::{Path, PathBuf};
+// use std::sync::mpsc::{self, Receiver};
 
 fn main() {
-  ctrlc::set_handler(move || {
-    ui::system_message("Shutting down".into());
-  })
-  .expect("Could not setup handler");
+  // ctrlc::set_handler(move || {
+  //   ui::system_message("Shutting down".into());
+  // })
+  // .expect("Could not setup handler");
   let version = format!(
     "{}.{}.{}{}",
     env!("CARGO_PKG_VERSION_MAJOR"),
@@ -69,7 +67,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("component")
-                .index(1)
+                .multiple(true)
                 .help("a specific component to execute")
         )
         .alias("play")
@@ -110,25 +108,36 @@ fn main() {
 
       let cmps = get_components(&config_fp);
       if let Some(direct_cmp) = cmps.iter().find(|x| x.name == matches.subcommand().0) {
-        run_component(&config_fp, &direct_cmp.name);
-        shutdown_component_services(&config_fp, &direct_cmp.name);
+        if let Err(e) = run_component(&config_fp, &direct_cmp.name) {
+          ui::system_error(format!("{}", e))
+        }
         return;
       }
 
       match matches.subcommand() {
         ("setup", _) => setup_project(&config_fp),
         ("run", Some(m)) => {
-          if let Some(cmp) = m.value_of("component") {
-            run_component(&config_fp, cmp);
-            shutdown_component_services(&config_fp, cmp);
+          let components: Vec<String> = m
+            .values_of("component")
+            .map(|c| c.collect())
+            .unwrap_or(vec![])
+            .into_iter()
+            .map(|c| String::from(c))
+            .collect();
+          if components.len() > 0 {
+            if let Err(e) = run_components(&config_fp, components) {
+              ui::system_error(format!("{}", e))
+            }
           } else {
-            run_project(&config_fp, tags.clone());
-            shutdown_project_services(&config_fp, tags);
+            if let Err(e) = run_project(&config_fp, tags.clone()) {
+              ui::system_error(format!("{}", e))
+            }
           }
         }
         _ => {
-          run_project(&config_fp, tags.clone());
-          shutdown_project_services(&config_fp, tags);
+          if let Err(e) = run_project(&config_fp, tags.clone()) {
+            ui::system_error(format!("{}", e))
+          }
         }
       };
     }

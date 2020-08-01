@@ -1,0 +1,27 @@
+name: test
+services: 
+- name: mysql
+  container: mysql
+components:
+  - name: echo
+    retry: false
+    path: ./
+    start:
+      command: echo
+      args: 
+        - echo ran
+  - name: long
+    path: ./
+    retry: false
+    start:
+      command: sleep
+      args: 
+        - 3
+  - name: looping
+    path: ./
+    services:
+    - mysql
+    start:
+      command: sleep
+      args: 
+        - 8
