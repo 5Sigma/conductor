@@ -190,13 +190,13 @@ pub fn stop_container(name: &str) -> io::Result<String> {
 
 #[cfg(target_os = "windows")]
 pub fn start_container(name: &str) -> io::Result<String> {
-  Ok(())
+  Ok((""))
 }
 
 #[cfg(target_os = "windows")]
 pub fn stop_container(name: &str) -> io::Result<String> {
   ui::system_error("Services are not supported on windows".into());
-  Ok(())
+  Ok((""))
 }
 
 pub fn run_component(fname: &PathBuf, component_name: &str) {
