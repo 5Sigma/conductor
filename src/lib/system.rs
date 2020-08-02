@@ -162,7 +162,6 @@ fn spawn_component(
         .take()
         .ok_or_else(|| SystemError::new("Could not create process pipe"))?;
 
-      // let buf = BufReader::new(stdout);
       let buf = get_buff_reader(stdout);
       let _ = buf.lines().try_for_each(|line| match line {
         Ok(body) => {
@@ -319,7 +318,6 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
     .iter()
     .filter(|c| component_names.contains(&c.name))
     .collect();
-
   if components.is_empty() {
     return Err(SystemError::new("No components to run"));
   }
@@ -366,6 +364,7 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
   for c in components {
     shutdown_component_services(&project, &c.name)
   }
+  // thread::sleep(std::time::Duration::from_secs(10));
   Ok(())
 }
 
