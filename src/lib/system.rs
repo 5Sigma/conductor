@@ -6,14 +6,40 @@ use std::io::prelude::*;
 use std::io::{BufReader, Error, ErrorKind};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-// use timeout_readwrite::TimeoutReader;
 
 #[derive(Debug)]
 pub enum ProjectError {
   Io(io::Error),
+}
+
+#[derive(Debug)]
+pub struct SystemError {
+  message: String,
+}
+
+impl SystemError {
+  fn new(message: &str) -> Self {
+    SystemError {
+      message: message.into(),
+    }
+  }
+}
+
+impl std::fmt::Display for SystemError {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "{}", self.message)
+  }
+}
+
+impl std::error::Error for SystemError {
+  fn description(&self) -> &str {
+    &self.message
+  }
 }
 
 pub struct ComponentMessage {
@@ -23,8 +49,44 @@ pub struct ComponentMessage {
 
 struct Worker {
   pub component: Component,
-  pub handler: thread::JoinHandle<()>,
+  pub handler: thread::JoinHandle<Result<(), SystemError>>,
   pub kill_signal: Sender<()>,
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn start_container(name: &str) -> io::Result<String> {
+  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
+  docker.start_container(name)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn stop_container(name: &str) -> io::Result<String> {
+  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
+  docker.stop_container(name)
+}
+
+#[cfg(target_os = "windows")]
+pub fn start_container(name: &str) -> io::Result<String> {
+  Ok("".into())
+}
+
+#[cfg(target_os = "windows")]
+pub fn stop_container(name: &str) -> io::Result<String> {
+  ui::system_error("Services are not supported on windows".into());
+  Ok("".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
+  Box::new(BufReader::new(timeout_readwrite::TimeoutReader::new(
+    out,
+    Duration::new(1, 0),
+  )))
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
+  Box::new(BufReader::new(out))
 }
 
 fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
@@ -58,7 +120,8 @@ fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf
 }
 
 fn spawn_component(
-  component: Component,
+  project: &Project,
+  component: &Component,
   data_tx: Sender<ComponentMessage>,
   root_path: &PathBuf,
 ) -> Result<Worker, Error> {
@@ -66,48 +129,83 @@ fn spawn_component(
   let (tx, rx) = mpsc::channel();
   let c = component.clone();
   let rp = root_path.clone();
-  let th = thread::spawn(move || {
+
+  for service_name in &c.services {
+    if let Some(service) = project.service_by_name(&service_name.clone()) {
+      match start_container(&service.container.unwrap_or(service.name.clone())) {
+        Ok(_) => ui::system_message(format!("Started service {}", &service.name)),
+        Err(e) => ui::system_error(format!("Error starting service {}: {}", &service.name, e)),
+      }
+    } else {
+      ui::system_error(format!(
+        "Could not find service definition: {}",
+        service_name
+      ))
+    }
+  }
+
+  let th = thread::spawn(move || -> Result<(), SystemError> {
     loop {
       let mut cmd = create_command(&c.start, &c, &rp);
+      let mut retry = c.retry;
       if let Some(delay) = c.delay {
         thread::sleep(Duration::from_secs(delay));
       }
-      let stdout_result: Result<std::process::ChildStdout, io::Error> =
-        cmd.stdout(Stdio::piped()).spawn().and_then(|mut child| {
-          child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::new(ErrorKind::Other, "Could not create process pipe"))
-        });
-      match stdout_result {
-        Ok(stdout) => {
-          let buf = BufReader::new(stdout);
-          let _ = buf.lines().try_for_each(|line| match line {
-            Ok(body) => {
-              let payload = ComponentMessage {
-                component: c.clone(),
-                body,
-              };
-              match data_tx.send(payload) {
-                Ok(_) => {}
-                Err(e) => println!("Error sending output: {}", e),
-              };
-              Some(())
+
+      let mut child: std::process::Child = cmd
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| SystemError::new(&format!("Could not spawn process: {}", e)))?;
+
+      let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| SystemError::new("Could not create process pipe"))?;
+
+      // let buf = BufReader::new(stdout);
+      let buf = get_buff_reader(stdout);
+      let _ = buf.lines().try_for_each(|line| match line {
+        Ok(body) => {
+          let payload = ComponentMessage {
+            component: c.clone(),
+            body,
+          };
+          match data_tx.send(payload) {
+            Ok(_) => {}
+            Err(e) => println!("Error sending output: {}", e),
+          };
+          match rx.try_recv() {
+            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+              retry = false;
+              let _ = child.kill();
+              Err(())
             }
-            Err(_) => match rx.try_recv() {
-              Ok(_) | Err(mpsc::TryRecvError::Disconnected) => Some(()), // currently not checking for kill signals
-              Err(mpsc::TryRecvError::Empty) => Some(()),
-            },
-          });
-          ui::system_message(format!("Component shutdown: {}", c.name));
+            Err(mpsc::TryRecvError::Empty) => Ok(()),
+          }
         }
-        Err(e) => {
-          ui::system_error(format!("Could not load component {}", c.name));
-          println!("{}", e);
+        Err(_) => match rx.try_recv() {
+          Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+            if let Err(e) = child.kill() {
+              ui::system_error(format!("Could not kill process: {}", e));
+            }
+            retry = false;
+            Err(())
+          }
+          Err(mpsc::TryRecvError::Empty) => Ok(()),
+        },
+      });
+
+      ui::system_message(format!("Component shutdown: {}", &c.name));
+
+      match rx.try_recv() {
+        Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+          retry = false;
         }
-      };
-      if !c.retry {
-        break;
+        Err(mpsc::TryRecvError::Empty) => {}
+      }
+
+      if !retry {
+        break Ok(());
       }
       ui::system_message(format!(
         "Restarting {} in {} seconds",
@@ -120,7 +218,7 @@ fn spawn_component(
 
   Ok(Worker {
     kill_signal: tx,
-    component,
+    component: component.clone(),
     handler: th,
   })
 }
@@ -150,95 +248,120 @@ pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
   }
 }
 
-pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) {
-  match Project::load(&fname) {
-    Err(e) => {
-      ui::system_error("Could not load project".into());
-      println!("{}", e);
-    }
-    Ok(project) => {
-      let mut root_path = fname.clone();
-      root_path.pop();
+pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), SystemError> {
+  let project = Project::load(&fname)
+    .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
+  let mut root_path = fname.clone();
+  root_path.pop();
 
-      let components = match tags {
-        Some(t) => project
-          .components
-          .into_iter()
-          .filter(|x| x.has_tag(&t.clone()))
-          .collect(),
-        None => project.components,
-      };
-
-      for c in components.iter() {
-        run_component(&fname, &c.name);
-      }
-    }
+  let component_names: Vec<String> = match tags {
+    Some(t) => project
+      .components
+      .into_iter()
+      .filter(|x| x.has_tag(&t.clone()))
+      .map(|x| x.name)
+      .collect(),
+    None => project.components.into_iter().map(|x| x.name).collect(),
   };
+  run_components(fname, component_names)
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn start_container(name: &str) -> io::Result<String> {
-  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
-  docker.start_container(name)
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn stop_container(name: &str) -> io::Result<String> {
-  let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
-  docker.stop_container(name)
-}
-
-#[cfg(target_os = "windows")]
-pub fn start_container(name: &str) -> io::Result<String> {
-  Ok("".into())
-}
-
-#[cfg(target_os = "windows")]
-pub fn stop_container(name: &str) -> io::Result<String> {
-  ui::system_error("Services are not supported on windows".into());
-  Ok("".into())
-}
-
-pub fn run_component(fname: &PathBuf, component_name: &str) {
+pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), SystemError> {
+  let (tx, rx) = mpsc::channel();
   let mut fname = fname.clone();
-  match Project::load(&fname) {
-    Err(e) => {
-      ui::system_error("Could not load project".into());
-      ui::system_error(format!("{}", e));
-    }
-    Ok(project) => {
-      let (tx, rx) = mpsc::channel();
-      fname.pop();
+  let project = Project::load(&fname)
+    .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
+  fname.pop();
+  let c = project
+    .components
+    .iter()
+    .find(|x| x.name == component_name)
+    .ok_or(SystemError::new(&format!(
+      "No component definition for {}",
+      &component_name,
+    )))?;
 
-      if let Some(c) = project.components.iter().find(|x| x.name == component_name) {
-        for service_name in &c.services {
-          if let Some(service) = project.service_by_name(&service_name.clone()) {
-            match start_container(&service.container.unwrap_or(service.name.clone())) {
-              Ok(_) => ui::system_message(format!("Started service {}", &service.name)),
-              Err(e) => {
-                ui::system_error(format!("Error starting service {}: {}", &service.name, e))
-              }
-            }
-          } else {
-            ui::system_error(format!(
-              "Could not find service definition: {}",
-              service_name
-            ))
-          }
-        }
+  ui::system_message(format!("Component start: {}", &component_name));
+  let worker = spawn_component(&project, &c, tx, &fname)
+    .map_err(|e| SystemError::new(&format!("Failed to spawn component: {}", e)))?;
 
-        match spawn_component(c.clone(), tx, &fname) {
-          Ok(_) => ui::system_message(format!("Started {}", c.name)),
-          Err(e) => ui::system_error(format!("Failed to start {}: {}", c.name, e)),
+  let ksig = worker.kill_signal.clone();
+  ctrlc::set_handler(move || match ksig.send(()) {
+    Ok(_) => {}
+    Err(_) => {}
+  })
+  .expect("Could not setup handler");
+
+  while let Ok(msg) = rx.recv() {
+    ui::component_message(&msg.component, msg.body)
+  }
+
+  let _ = worker.handler.join().unwrap();
+  ui::system_message(format!("Component shutdown: {}", &component_name));
+  shutdown_component_services(&project, component_name);
+  Ok(())
+}
+
+pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(), SystemError> {
+  let running = Arc::new(AtomicBool::new(true));
+  let (tx, rx) = mpsc::channel();
+  let mut fname = fname.clone();
+  let project = Project::load(&fname)
+    .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
+  fname.pop();
+  let components: Vec<&Component> = project
+    .components
+    .iter()
+    .filter(|c| component_names.contains(&c.name))
+    .collect();
+
+  if components.is_empty() {
+    return Err(SystemError::new("No components to run"));
+  }
+
+  let workers: Vec<Worker> = components
+    .iter()
+    .map(|c| {
+      ui::system_message(format!("Component start: {}", &c.name));
+      match spawn_component(&project, c, tx.clone(), &fname) {
+        Ok(w) => Some(w),
+        Err(e) => {
+          ui::system_error(format!("Could not start {}: {}", &c.name, e));
+          None
         }
-        while let Ok(msg) = rx.recv() {
-          ui::component_message(&msg.component, msg.body)
-        }
-      } else {
-        ui::system_error(format!("Could not find component: {}", component_name))
       }
+    })
+    .filter_map(Option::Some)
+    .map(|c| c.unwrap())
+    .collect();
+
+  let signals: Vec<Sender<()>> = workers.iter().map(|w| w.kill_signal.clone()).collect();
+  let r = running.clone();
+  ctrlc::set_handler(move || {
+    r.store(false, Ordering::SeqCst);
+    for s in signals.to_owned() {
+      match s.send(()) {
+        Ok(_) => {}
+        Err(_) => {}
+      }
+    }
+  })
+  .expect("Could not setup handler");
+
+  while running.load(Ordering::SeqCst) {
+    while let Ok(msg) = rx.recv_timeout(Duration::from_secs(1)) {
+      ui::component_message(&msg.component, msg.body)
     }
   }
+
+  for w in workers {
+    let _ = w.handler.join().unwrap();
+  }
+
+  for c in components {
+    shutdown_component_services(&project, &c.name)
+  }
+  Ok(())
 }
 
 pub fn setup_project(fname: &PathBuf) {
@@ -277,45 +400,30 @@ pub fn get_components(fname: &PathBuf) -> Vec<Component> {
   }
 }
 
-pub fn shutdown_project_services(fname: &PathBuf, tags: Option<Vec<&str>>) {
-  match Project::load(&fname) {
-    Err(e) => {
-      ui::system_error("Could not load project".into());
-      ui::system_error(format!("{}", e));
-    }
-    Ok(project) => {
-      let components = match tags {
-        Some(t) => project
-          .components
-          .into_iter()
-          .filter(|x| x.has_tag(&t.clone()))
-          .collect(),
-        None => project.components,
-      };
+pub fn shutdown_project_services(project: &Project, tags: Option<Vec<&str>>) {
+  let components = match tags {
+    Some(t) => project
+      .clone()
+      .components
+      .into_iter()
+      .filter(|x| x.has_tag(&t.clone()))
+      .collect(),
+    None => project.clone().components,
+  };
 
-      for component in components {
-        shutdown_component_services(fname, &component.name)
-      }
-    }
+  for component in components {
+    shutdown_component_services(project, &component.name)
   }
 }
 
-pub fn shutdown_component_services(fname: &PathBuf, component_name: &str) {
-  match Project::load(&fname) {
-    Err(e) => {
-      ui::system_error("Could not load project".into());
-      ui::system_error(format!("{}", e));
-    }
-    Ok(project) => {
-      if let Some(c) = project.components.iter().find(|x| x.name == component_name) {
-        for service_name in &c.services {
-          if let Some(service) = project.service_by_name(&service_name) {
-            let name = service.container.unwrap_or(service.name.clone());
-            ui::system_message(format!("Stopping service {}", &service.name));
-            if let Err(e) = stop_container(&name) {
-              ui::system_error(format!("Could not stop service {}: {}", &service.name, e))
-            }
-          }
+pub fn shutdown_component_services(project: &Project, component_name: &str) {
+  if let Some(c) = project.components.iter().find(|x| x.name == component_name) {
+    for service_name in &c.services {
+      if let Some(service) = project.service_by_name(&service_name) {
+        let name = service.container.unwrap_or(service.name.clone());
+        ui::system_message(format!("Stopping service {}", &service.name));
+        if let Err(e) = stop_container(&name) {
+          ui::system_error(format!("Could not stop service {}: {}", &service.name, e))
         }
       }
     }
