@@ -258,10 +258,15 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
     Some(t) => project
       .components
       .into_iter()
-      .filter(|x| x.has_tag(&t.clone()))
+      .filter(|x| x.has_tag(&t.clone()) || x.default == true)
       .map(|x| x.name)
       .collect(),
-    None => project.components.into_iter().map(|x| x.name).collect(),
+    None => project
+      .components
+      .into_iter()
+      .filter(|x| x.default == true)
+      .map(|x| x.name)
+      .collect(),
   };
   run_components(fname, component_names)
 }

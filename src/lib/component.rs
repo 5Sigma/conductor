@@ -34,6 +34,7 @@ pub struct Component {
   pub init: Vec<Command>,
   pub tags: Vec<String>,
   pub retry: bool,
+  pub default: bool,
   pub services: Vec<String>,
 }
 
@@ -41,6 +42,7 @@ impl Default for Component {
   fn default() -> Self {
     Component {
       name: "Unknown".into(),
+      default: true,
       path: None,
       env: HashMap::new(),
       repo: None,
