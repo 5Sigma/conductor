@@ -1,5 +1,6 @@
 use clap::{App, Arg, SubCommand};
 use conductor::{run_component, run_components, run_project, setup_project, ui, Project};
+use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -130,7 +131,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_iter()
     .find(|x| x.name == matches.subcommand().0)
   {
-    if let Err(e) = run_components(&config_fp, direct_group.components.to_owned()) {
+    if let Err(e) = run_components(
+      &config_fp,
+      direct_group.components.to_owned(),
+      direct_group.env.to_owned(),
+    ) {
       ui::system_error(format!("{}", e))
     }
     return Ok(());
@@ -147,7 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|c| String::from(c))
         .collect();
       if !components.is_empty() {
-        if let Err(e) = run_components(&config_fp, components) {
+        if let Err(e) = run_components(&config_fp, components, HashMap::new()) {
           ui::system_error(format!("{}", e))
         }
       } else {

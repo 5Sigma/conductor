@@ -1,9 +1,10 @@
 use crate::{ui, Component, Project};
 #[cfg(not(target_os = "windows"))]
 use rs_docker::Docker;
+use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
-use std::io::{BufReader, Error, ErrorKind};
+use std::io::{BufReader, Error};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,25 +90,33 @@ pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
   Box::new(BufReader::new(out))
 }
 
-fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
+fn create_command(
+  c: &crate::Command,
+  component: &Component,
+  root_path: &PathBuf,
+  extra_env: HashMap<String, String>,
+) -> Command {
   let mut cmd = Command::new(
     expand_str::expand_string_with_env(&c.command).unwrap_or_else(|_| c.command.clone()),
   );
+
+  let mut env: HashMap<String, String> = HashMap::new();
+
+  env.extend(component.env.clone());
+  env.extend(c.env.clone());
+  env.extend(extra_env);
+
+  for (k, v) in env {
+    cmd.env(
+      k,
+      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
+    );
+  }
+
   c.args.iter().for_each(|a| {
     cmd.arg(expand_str::expand_string_with_env(a).unwrap_or_else(|_| a.clone()));
   });
-  for (k, v) in &c.env {
-    cmd.env(
-      k,
-      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
-    );
-  }
-  for (k, v) in &component.env {
-    cmd.env(
-      k,
-      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
-    );
-  }
+
   let dir = component
     .clone()
     .start
@@ -124,6 +133,7 @@ fn spawn_component(
   component: &Component,
   data_tx: Sender<ComponentMessage>,
   root_path: &PathBuf,
+  env: HashMap<String, String>,
 ) -> Result<Worker, Error> {
   let data_tx = data_tx;
   let (tx, rx) = mpsc::channel();
@@ -146,7 +156,7 @@ fn spawn_component(
 
   let th = thread::spawn(move || -> Result<(), SystemError> {
     loop {
-      let mut cmd = create_command(&c.start, &c, &rp);
+      let mut cmd = create_command(&c.start, &c, &rp, env.to_owned());
       let mut retry = c.retry;
       if let Some(delay) = c.delay {
         thread::sleep(Duration::from_secs(delay));
@@ -223,18 +233,20 @@ fn spawn_component(
 }
 
 pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
-  let mut cmd = create_command(c, cmp, &root_path);
+  let mut cmd = create_command(c, cmp, &root_path, HashMap::new());
   ui::system_message(format!("Executing: {}", c));
 
   match cmd
     .stdout(Stdio::piped())
     .spawn()
+    .map_err(|e| SystemError::new(&format!("Error spawning process: {}", e)))
     .and_then(|mut child| {
       child
         .stdout
         .take()
-        .ok_or_else(|| Error::new(ErrorKind::Other, "Could not create process pipe"))
+        .ok_or_else(|| SystemError::new(&format!("Could not create output pipe.")))
     })
+    .map_err(|e| SystemError::new(&format!("Could not spawn child: {}", e)))
     .map(|stdout| BufReader::new(stdout).lines())
   {
     Ok(lines) => lines.for_each(|line| {
@@ -242,7 +254,7 @@ pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
     }),
     Err(e) => {
       ui::system_error("Command Error".into());
-      println!("{}", e);
+      ui::system_error(format!("{}", e));
     }
   }
 }
@@ -267,10 +279,11 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
       .map(|x| x.name)
       .collect(),
   };
-  run_components(fname, component_names)
+  run_components(fname, component_names, HashMap::new())
 }
 
 pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), SystemError> {
+  let running = Arc::new(AtomicBool::new(true));
   let (tx, rx) = mpsc::channel();
   let mut fname = fname.clone();
   let project = Project::load(&fname)
@@ -286,27 +299,40 @@ pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), System
     )))?;
 
   ui::system_message(format!("Component start: {}", &component_name));
-  let worker = spawn_component(&project, &c, tx, &fname)
+  let worker = spawn_component(&project, &c, tx, &fname, HashMap::new())
     .map_err(|e| SystemError::new(&format!("Failed to spawn component: {}", e)))?;
 
   let ksig = worker.kill_signal.clone();
-  ctrlc::set_handler(move || match ksig.send(()) {
-    Ok(_) => {}
-    Err(_) => {}
+  let r = running.clone();
+  ctrlc::set_handler(move || {
+    r.store(false, Ordering::SeqCst);
+    match ksig.send(()) {
+      Ok(_) => {}
+      Err(_) => {}
+    }
   })
   .expect("Could not setup handler");
 
-  while let Ok(msg) = rx.recv() {
-    ui::component_message(&msg.component, msg.body)
+  while running.load(Ordering::SeqCst) {
+    while let Ok(msg) = rx.recv_timeout(Duration::from_secs(1)) {
+      ui::component_message(&msg.component, msg.body)
+    }
   }
 
-  let _ = worker.handler.join().unwrap();
-  ui::system_message(format!("Component shutdown: {}", &component_name));
+  if let Err(e) = worker.handler.join().unwrap() {
+    ui::system_error(format!("[Execution Error] {}", e));
+  } else {
+    ui::system_message(format!("Component shutdown: {}", &component_name));
+  }
   shutdown_component_services(&project, component_name);
   Ok(())
 }
 
-pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(), SystemError> {
+pub fn run_components(
+  fname: &PathBuf,
+  component_names: Vec<String>,
+  env: HashMap<String, String>,
+) -> Result<(), SystemError> {
   let running = Arc::new(AtomicBool::new(true));
   let (tx, rx) = mpsc::channel();
   let mut fname = fname.clone();
@@ -326,7 +352,7 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
     .iter()
     .map(|c| {
       ui::system_message(format!("Component start: {}", &c.name));
-      match spawn_component(&project, c, tx.clone(), &fname) {
+      match spawn_component(&project, c, tx.clone(), &fname, env.clone()) {
         Ok(w) => Some(w),
         Err(e) => {
           ui::system_error(format!("Could not start {}: {}", &c.name, e));
@@ -364,7 +390,6 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
   for c in components {
     shutdown_component_services(&project, &c.name)
   }
-  // thread::sleep(std::time::Duration::from_secs(10));
   Ok(())
 }
 
