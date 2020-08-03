@@ -28,3 +28,9 @@ impl Default for Service {
     }
   }
 }
+
+impl Service {
+  pub fn get_container_name(&self) -> String {
+    self.container.as_ref().unwrap_or(&self.name).clone()
+  }
+}

@@ -103,10 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Some(fp) => Some(fp.into()),
     None => find_config("conductor.yml"),
   }
-  .ok_or(std::io::Error::new(
-    std::io::ErrorKind::NotFound,
-    "config not found",
-  ))?;
+  .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "config not found"))?;
 
   let project = Project::load(&config_fp)?;
 
@@ -147,18 +144,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       let components: Vec<String> = m
         .values_of("component")
         .map(|c| c.collect())
-        .unwrap_or(vec![])
+        .unwrap_or_else(Vec::new)
         .into_iter()
-        .map(|c| String::from(c))
+        .map(String::from)
         .collect();
       if !components.is_empty() {
         if let Err(e) = run_components(&config_fp, components, HashMap::new()) {
           ui::system_error(format!("{}", e))
         }
-      } else {
-        if let Err(e) = run_project(&config_fp, tags.clone()) {
-          ui::system_error(format!("{}", e))
-        }
+      } else if let Err(e) = run_project(&config_fp, tags.clone()) {
+        ui::system_error(format!("{}", e))
       }
     }
     _ => {
