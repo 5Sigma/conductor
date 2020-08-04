@@ -98,13 +98,8 @@ pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
 /// Expands a string using environment variables.
 /// Environment variables are detected as %VAR% and replaced with the coorisponding
 /// environment variable value
-///
-/// # Examples
-/// ```
-/// let s = expand_env("%PATH%:./bin");
-/// ```
-fn expand_env(str: &String) -> String {
-  expand_str::expand_string_with_env(str).unwrap_or_else(|_| str.clone())
+fn expand_env(str: &str) -> String {
+  expand_str::expand_string_with_env(str).unwrap_or_else(|_| str.to_string())
 }
 
 /// Converts a conductor::Command to a process::Command for a given component. Additional environment variables can also
@@ -273,17 +268,6 @@ pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
 
 /// runs components defined in the project. If no tags are specified all default components are executed.
 /// if a set of tags are specified only those components which contain those tags are executed.
-///
-/// # Examples
-///
-/// ```
-/// let fname: std::path::PathBuf = "./conductor.yml".into();
-/// let project = Project::load("conductor.yml").expect("couldnt load project");
-/// match run_project(fname, None) {
-///   Ok(_) => println!("Component finished");
-///   Err(e) => println!("Couldnt run project: {}", e);
-/// }
-/// ```
 pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), SystemError> {
   let project = Project::load(&fname)
     .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
@@ -309,17 +293,6 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
 }
 
 /// runs a specific component by name.
-///
-/// # Examples
-///
-/// ```
-/// let fname: std::path::PathBuf = "./conductor.yml".into();
-/// let project = Project::load("conductor.yml").expect("couldnt load project");
-/// match run_component(fname, "my_component") {
-///   Ok(_) => println!("Component finished");
-///   Err(e) => println!("Couldnt run component: {}", e);
-/// }
-/// ```
 pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), SystemError> {
   let running = Arc::new(AtomicBool::new(true));
   let (tx, rx) = mpsc::channel();
@@ -336,7 +309,7 @@ pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), System
     })?;
 
   ui::system_message(format!("Component start: {}", &component_name));
-  let worker = spawn_component(&project, &c, tx, &fname, HashMap::new())
+  let worker: Worker = spawn_component(&project, &c, tx, &fname, HashMap::new())
     .map_err(|e| SystemError::new(&format!("Failed to spawn component: {}", e)))?;
 
   let ksig = worker.kill_signal.clone();
@@ -364,18 +337,6 @@ pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), System
 
 /// runs one or more components by name. An additional set of environment variables can
 /// be passed in that will override any existing component or command environment settings.
-///
-/// # Examples
-///
-/// ```
-/// let fname: std::path::PathBuf = "./conductor.yml".into();
-/// let project = Project::load("conductor.yml").expect("couldnt load project");
-/// let names = vec!["component1".into(), "component2".into()]
-/// match run_componentifname, names, None) {
-///   Ok(_) => println!("Component finished");
-///   Err(e) => println!("Couldnt run component: {}", e);
-/// }
-/// ```
 pub fn run_components(
   fname: &PathBuf,
   component_names: Vec<String>,
@@ -439,10 +400,6 @@ pub fn run_components(
 }
 
 /// sets up a project from scratch. Clones the specfied repos for all components and runs all init commands.
-/// ```
-/// let fname: std::path::PathBuf = "./conductor.yml".into();
-/// setup_project(fname)?;
-/// ```
 pub fn setup_project(fname: &PathBuf) {
   match Project::load(&fname) {
     Err(e) => {
