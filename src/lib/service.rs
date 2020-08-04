@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+/// The type of the service. Currently only Docker is supported.
 #[derive(Clone, Deserialize, PartialEq)]
 pub enum ServiceType {
   DockerContainer,
@@ -11,6 +12,8 @@ impl Default for ServiceType {
   }
 }
 
+/// Services are external support systems used by the component. Currently only docker containers
+/// are supported. Support for services is also limited to MacOS and Linux platforms.
 #[derive(Clone, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Service {

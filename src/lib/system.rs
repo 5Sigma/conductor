@@ -43,11 +43,16 @@ impl std::error::Error for SystemError {
   }
 }
 
+/// Used to send out the output stream for a running component. Holds a copy of the component itself as well
+/// as the output text.
 pub struct ComponentMessage {
   component: Component,
   body: String,
 }
 
+/// Worker is used to encapsulate a reference to a running component.
+/// It holds a reference to the component, the thread handler, and the kill_signal
+/// that is used to allow the component to exit.
 struct Worker {
   pub component: Component,
   pub handler: thread::JoinHandle<Result<(), SystemError>>,
@@ -90,16 +95,27 @@ pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
   Box::new(BufReader::new(out))
 }
 
+/// Expands a string using environment variables.
+/// Environment variables are detected as %VAR% and replaced with the coorisponding
+/// environment variable value
+///
+/// # Examples
+/// ```
+/// let s = expand_env("%PATH%:./bin");
+/// ```
+fn expand_env(str: &String) -> String {
+  expand_str::expand_string_with_env(str).unwrap_or_else(|_| str.clone())
+}
+
+/// Converts a conductor::Command to a process::Command for a given component. Additional environment variables can also
+/// be passed in. These are used to override any existing variables from the Component or the Command.
 fn create_command(
   c: &crate::Command,
   component: &Component,
   root_path: &PathBuf,
   extra_env: HashMap<String, String>,
 ) -> Command {
-  let mut cmd = Command::new(
-    expand_str::expand_string_with_env(&c.command).unwrap_or_else(|_| c.command.clone()),
-  );
-
+  let mut cmd = Command::new(expand_env(&c.command));
   let mut env: HashMap<String, String> = HashMap::new();
 
   env.extend(component.env.clone());
@@ -107,15 +123,12 @@ fn create_command(
   env.extend(extra_env);
 
   for (k, v) in env {
-    cmd.env(
-      k,
-      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
-    );
+    cmd.env(k, expand_env(&v));
   }
 
-  c.args.iter().for_each(|a| {
-    cmd.arg(expand_str::expand_string_with_env(a).unwrap_or_else(|_| a.clone()));
-  });
+  for a in &c.args {
+    cmd.arg(expand_env(a));
+  }
 
   let dir = component
     .clone()
@@ -123,7 +136,7 @@ fn create_command(
     .dir
     .unwrap_or_else(|| component.get_path().to_str().unwrap_or("").into());
   let mut root_path = root_path.clone();
-  root_path.push(&expand_str::expand_string_with_env(&dir).unwrap_or_else(|_| dir.clone()));
+  root_path.push(expand_env(&dir));
   cmd.current_dir(root_path);
   cmd
 }
@@ -179,10 +192,9 @@ fn spawn_component(
             component: c.clone(),
             body,
           };
-          match data_tx.send(payload) {
-            Ok(_) => {}
-            Err(e) => println!("Error sending output: {}", e),
-          };
+          if let Err(e) = data_tx.send(payload) {
+            println!("Error sending output: {}", e)
+          }
           match rx.try_recv() {
             Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
               retry = false;
@@ -259,17 +271,31 @@ pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
   }
 }
 
+/// runs components defined in the project. If no tags are specified all default components are executed.
+/// if a set of tags are specified only those components which contain those tags are executed.
+///
+/// # Examples
+///
+/// ```
+/// let fname: std::path::PathBuf = "./conductor.yml".into();
+/// let project = Project::load("conductor.yml").expect("couldnt load project");
+/// match run_project(fname, None) {
+///   Ok(_) => println!("Component finished");
+///   Err(e) => println!("Couldnt run project: {}", e);
+/// }
+/// ```
 pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), SystemError> {
   let project = Project::load(&fname)
     .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
   let mut root_path = fname.clone();
   root_path.pop();
 
+  let has_tags = tags.is_some();
   let component_names: Vec<String> = match tags {
     Some(t) => project
       .components
       .into_iter()
-      .filter(|x| x.has_tag(&t.clone()) || x.default)
+      .filter(|x| x.has_tag(&t.clone()) || (!has_tags && x.default))
       .map(|x| x.name)
       .collect(),
     None => project
@@ -282,6 +308,18 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
   run_components(fname, component_names, HashMap::new())
 }
 
+/// runs a specific component by name.
+///
+/// # Examples
+///
+/// ```
+/// let fname: std::path::PathBuf = "./conductor.yml".into();
+/// let project = Project::load("conductor.yml").expect("couldnt load project");
+/// match run_component(fname, "my_component") {
+///   Ok(_) => println!("Component finished");
+///   Err(e) => println!("Couldnt run component: {}", e);
+/// }
+/// ```
 pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), SystemError> {
   let running = Arc::new(AtomicBool::new(true));
   let (tx, rx) = mpsc::channel();
@@ -324,6 +362,20 @@ pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), System
   Ok(())
 }
 
+/// runs one or more components by name. An additional set of environment variables can
+/// be passed in that will override any existing component or command environment settings.
+///
+/// # Examples
+///
+/// ```
+/// let fname: std::path::PathBuf = "./conductor.yml".into();
+/// let project = Project::load("conductor.yml").expect("couldnt load project");
+/// let names = vec!["component1".into(), "component2".into()]
+/// match run_componentifname, names, None) {
+///   Ok(_) => println!("Component finished");
+///   Err(e) => println!("Couldnt run component: {}", e);
+/// }
+/// ```
 pub fn run_components(
   fname: &PathBuf,
   component_names: Vec<String>,
@@ -386,6 +438,11 @@ pub fn run_components(
   Ok(())
 }
 
+/// sets up a project from scratch. Clones the specfied repos for all components and runs all init commands.
+/// ```
+/// let fname: std::path::PathBuf = "./conductor.yml".into();
+/// setup_project(fname)?;
+/// ```
 pub fn setup_project(fname: &PathBuf) {
   match Project::load(&fname) {
     Err(e) => {
@@ -412,6 +469,7 @@ pub fn setup_project(fname: &PathBuf) {
   };
 }
 
+/// returns a list of all components in the project.
 pub fn get_components(fname: &PathBuf) -> Vec<Component> {
   match Project::load(&fname) {
     Err(_) => {
@@ -422,6 +480,8 @@ pub fn get_components(fname: &PathBuf) -> Vec<Component> {
   }
 }
 
+/// Shuts down all services defined in the project. If tags are passed in only services
+/// used by components with those tags will be shutdown.
 pub fn shutdown_project_services(project: &Project, tags: Option<Vec<&str>>) {
   let components = match tags {
     Some(t) => project
@@ -438,6 +498,7 @@ pub fn shutdown_project_services(project: &Project, tags: Option<Vec<&str>>) {
   }
 }
 
+/// Shuts down all services used by a component.
 pub fn shutdown_component_services(project: &Project, component_name: &str) {
   if let Some(c) = project.components.iter().find(|x| x.name == component_name) {
     for service_name in &c.services {
