@@ -1,4 +1,5 @@
 use crate::Component;
+use crate::Group;
 use crate::Service;
 use serde::Deserialize;
 use std::fs;
@@ -6,12 +7,11 @@ use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 
 #[derive(Deserialize, PartialEq, Clone)]
+#[serde(default)]
 pub struct Project {
-  #[serde(default)]
   pub name: String,
-  #[serde(default)]
   pub components: Vec<Component>,
-  #[serde(default)]
+  pub groups: Vec<Group>,
   pub services: Vec<Service>,
 }
 
@@ -37,6 +37,7 @@ impl Default for Project {
       name: "Unnamed Project".into(),
       components: vec![],
       services: vec![],
+      groups: vec![],
     }
   }
 }

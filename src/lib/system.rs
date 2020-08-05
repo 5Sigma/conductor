@@ -1,9 +1,10 @@
 use crate::{ui, Component, Project};
 #[cfg(not(target_os = "windows"))]
 use rs_docker::Docker;
+use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
-use std::io::{BufReader, Error, ErrorKind};
+use std::io::{BufReader, Error};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,11 +43,16 @@ impl std::error::Error for SystemError {
   }
 }
 
+/// Used to send out the output stream for a running component. Holds a copy of the component itself as well
+/// as the output text.
 pub struct ComponentMessage {
   component: Component,
   body: String,
 }
 
+/// Worker is used to encapsulate a reference to a running component.
+/// It holds a reference to the component, the thread handler, and the kill_signal
+/// that is used to allow the component to exit.
 struct Worker {
   pub component: Component,
   pub handler: thread::JoinHandle<Result<(), SystemError>>,
@@ -89,32 +95,43 @@ pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
   Box::new(BufReader::new(out))
 }
 
-fn create_command(c: &crate::Command, component: &Component, root_path: &PathBuf) -> Command {
-  let mut cmd = Command::new(
-    expand_str::expand_string_with_env(&c.command).unwrap_or_else(|_| c.command.clone()),
-  );
-  c.args.iter().for_each(|a| {
-    cmd.arg(expand_str::expand_string_with_env(a).unwrap_or_else(|_| a.clone()));
-  });
-  for (k, v) in &c.env {
-    cmd.env(
-      k,
-      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
-    );
+/// Expands a string using environment variables.
+/// Environment variables are detected as %VAR% and replaced with the coorisponding
+/// environment variable value
+fn expand_env(str: &str) -> String {
+  expand_str::expand_string_with_env(str).unwrap_or_else(|_| str.to_string())
+}
+
+/// Converts a conductor::Command to a process::Command for a given component. Additional environment variables can also
+/// be passed in. These are used to override any existing variables from the Component or the Command.
+fn create_command(
+  c: &crate::Command,
+  component: &Component,
+  root_path: &PathBuf,
+  extra_env: HashMap<String, String>,
+) -> Command {
+  let mut cmd = Command::new(expand_env(&c.command));
+  let mut env: HashMap<String, String> = HashMap::new();
+
+  env.extend(component.env.clone());
+  env.extend(c.env.clone());
+  env.extend(extra_env);
+
+  for (k, v) in env {
+    cmd.env(k, expand_env(&v));
   }
-  for (k, v) in &component.env {
-    cmd.env(
-      k,
-      expand_str::expand_string_with_env(&v).unwrap_or_else(|_| v.clone()),
-    );
+
+  for a in &c.args {
+    cmd.arg(expand_env(a));
   }
+
   let dir = component
     .clone()
     .start
     .dir
     .unwrap_or_else(|| component.get_path().to_str().unwrap_or("").into());
   let mut root_path = root_path.clone();
-  root_path.push(&expand_str::expand_string_with_env(&dir).unwrap_or_else(|_| dir.clone()));
+  root_path.push(expand_env(&dir));
   cmd.current_dir(root_path);
   cmd
 }
@@ -124,6 +141,7 @@ fn spawn_component(
   component: &Component,
   data_tx: Sender<ComponentMessage>,
   root_path: &PathBuf,
+  env: HashMap<String, String>,
 ) -> Result<Worker, Error> {
   let data_tx = data_tx;
   let (tx, rx) = mpsc::channel();
@@ -132,7 +150,7 @@ fn spawn_component(
 
   for service_name in &c.services {
     if let Some(service) = project.service_by_name(&service_name.clone()) {
-      match start_container(&service.container.unwrap_or(service.name.clone())) {
+      match start_container(&service.get_container_name()) {
         Ok(_) => ui::system_message(format!("Started service {}", &service.name)),
         Err(e) => ui::system_error(format!("Error starting service {}: {}", &service.name, e)),
       }
@@ -146,7 +164,7 @@ fn spawn_component(
 
   let th = thread::spawn(move || -> Result<(), SystemError> {
     loop {
-      let mut cmd = create_command(&c.start, &c, &rp);
+      let mut cmd = create_command(&c.start, &c, &rp, env.to_owned());
       let mut retry = c.retry;
       if let Some(delay) = c.delay {
         thread::sleep(Duration::from_secs(delay));
@@ -162,7 +180,6 @@ fn spawn_component(
         .take()
         .ok_or_else(|| SystemError::new("Could not create process pipe"))?;
 
-      // let buf = BufReader::new(stdout);
       let buf = get_buff_reader(stdout);
       let _ = buf.lines().try_for_each(|line| match line {
         Ok(body) => {
@@ -170,10 +187,9 @@ fn spawn_component(
             component: c.clone(),
             body,
           };
-          match data_tx.send(payload) {
-            Ok(_) => {}
-            Err(e) => println!("Error sending output: {}", e),
-          };
+          if let Err(e) = data_tx.send(payload) {
+            println!("Error sending output: {}", e)
+          }
           match rx.try_recv() {
             Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
               retry = false;
@@ -224,18 +240,20 @@ fn spawn_component(
 }
 
 pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
-  let mut cmd = create_command(c, cmp, &root_path);
+  let mut cmd = create_command(c, cmp, &root_path, HashMap::new());
   ui::system_message(format!("Executing: {}", c));
 
   match cmd
     .stdout(Stdio::piped())
     .spawn()
+    .map_err(|e| SystemError::new(&format!("Error spawning process: {}", e)))
     .and_then(|mut child| {
       child
         .stdout
         .take()
-        .ok_or_else(|| Error::new(ErrorKind::Other, "Could not create process pipe"))
+        .ok_or_else(|| SystemError::new("Could not create output pipe."))
     })
+    .map_err(|e| SystemError::new(&format!("Could not spawn child: {}", e)))
     .map(|stdout| BufReader::new(stdout).lines())
   {
     Ok(lines) => lines.for_each(|line| {
@@ -243,35 +261,40 @@ pub fn run_command(c: &crate::Command, cmp: &Component, root_path: &PathBuf) {
     }),
     Err(e) => {
       ui::system_error("Command Error".into());
-      println!("{}", e);
+      ui::system_error(format!("{}", e));
     }
   }
 }
 
+/// runs components defined in the project. If no tags are specified all default components are executed.
+/// if a set of tags are specified only those components which contain those tags are executed.
 pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), SystemError> {
   let project = Project::load(&fname)
     .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
   let mut root_path = fname.clone();
   root_path.pop();
 
+  let has_tags = tags.is_some();
   let component_names: Vec<String> = match tags {
     Some(t) => project
       .components
       .into_iter()
-      .filter(|x| x.has_tag(&t.clone()) || x.default == true)
+      .filter(|x| x.has_tag(&t.clone()) || (!has_tags && x.default))
       .map(|x| x.name)
       .collect(),
     None => project
       .components
       .into_iter()
-      .filter(|x| x.default == true)
+      .filter(|x| x.default)
       .map(|x| x.name)
       .collect(),
   };
-  run_components(fname, component_names)
+  run_components(fname, component_names, HashMap::new())
 }
 
+/// runs a specific component by name.
 pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), SystemError> {
+  let running = Arc::new(AtomicBool::new(true));
   let (tx, rx) = mpsc::channel();
   let mut fname = fname.clone();
   let project = Project::load(&fname)
@@ -281,33 +304,44 @@ pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), System
     .components
     .iter()
     .find(|x| x.name == component_name)
-    .ok_or(SystemError::new(&format!(
-      "No component definition for {}",
-      &component_name,
-    )))?;
+    .ok_or_else(|| {
+      SystemError::new(&format!("No component definition for {}", &component_name,))
+    })?;
 
   ui::system_message(format!("Component start: {}", &component_name));
-  let worker = spawn_component(&project, &c, tx, &fname)
+  let worker: Worker = spawn_component(&project, &c, tx, &fname, HashMap::new())
     .map_err(|e| SystemError::new(&format!("Failed to spawn component: {}", e)))?;
 
   let ksig = worker.kill_signal.clone();
-  ctrlc::set_handler(move || match ksig.send(()) {
-    Ok(_) => {}
-    Err(_) => {}
+  let r = running.clone();
+  ctrlc::set_handler(move || {
+    r.store(false, Ordering::SeqCst);
+    let _ = ksig.send(());
   })
   .expect("Could not setup handler");
 
-  while let Ok(msg) = rx.recv() {
-    ui::component_message(&msg.component, msg.body)
+  while running.load(Ordering::SeqCst) {
+    while let Ok(msg) = rx.recv_timeout(Duration::from_secs(1)) {
+      ui::component_message(&msg.component, msg.body)
+    }
   }
 
-  let _ = worker.handler.join().unwrap();
-  ui::system_message(format!("Component shutdown: {}", &component_name));
+  if let Err(e) = worker.handler.join().unwrap() {
+    ui::system_error(format!("[Execution Error] {}", e));
+  } else {
+    ui::system_message(format!("Component shutdown: {}", &component_name));
+  }
   shutdown_component_services(&project, component_name);
   Ok(())
 }
 
-pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(), SystemError> {
+/// runs one or more components by name. An additional set of environment variables can
+/// be passed in that will override any existing component or command environment settings.
+pub fn run_components(
+  fname: &PathBuf,
+  component_names: Vec<String>,
+  env: HashMap<String, String>,
+) -> Result<(), SystemError> {
   let running = Arc::new(AtomicBool::new(true));
   let (tx, rx) = mpsc::channel();
   let mut fname = fname.clone();
@@ -319,7 +353,6 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
     .iter()
     .filter(|c| component_names.contains(&c.name))
     .collect();
-
   if components.is_empty() {
     return Err(SystemError::new("No components to run"));
   }
@@ -328,7 +361,7 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
     .iter()
     .map(|c| {
       ui::system_message(format!("Component start: {}", &c.name));
-      match spawn_component(&project, c, tx.clone(), &fname) {
+      match spawn_component(&project, c, tx.clone(), &fname, env.clone()) {
         Ok(w) => Some(w),
         Err(e) => {
           ui::system_error(format!("Could not start {}: {}", &c.name, e));
@@ -345,10 +378,7 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
   ctrlc::set_handler(move || {
     r.store(false, Ordering::SeqCst);
     for s in signals.to_owned() {
-      match s.send(()) {
-        Ok(_) => {}
-        Err(_) => {}
-      }
+      let _ = s.send(());
     }
   })
   .expect("Could not setup handler");
@@ -369,6 +399,7 @@ pub fn run_components(fname: &PathBuf, component_names: Vec<String>) -> Result<(
   Ok(())
 }
 
+/// sets up a project from scratch. Clones the specfied repos for all components and runs all init commands.
 pub fn setup_project(fname: &PathBuf) {
   match Project::load(&fname) {
     Err(e) => {
@@ -395,6 +426,7 @@ pub fn setup_project(fname: &PathBuf) {
   };
 }
 
+/// returns a list of all components in the project.
 pub fn get_components(fname: &PathBuf) -> Vec<Component> {
   match Project::load(&fname) {
     Err(_) => {
@@ -405,6 +437,8 @@ pub fn get_components(fname: &PathBuf) -> Vec<Component> {
   }
 }
 
+/// Shuts down all services defined in the project. If tags are passed in only services
+/// used by components with those tags will be shutdown.
 pub fn shutdown_project_services(project: &Project, tags: Option<Vec<&str>>) {
   let components = match tags {
     Some(t) => project
@@ -421,12 +455,13 @@ pub fn shutdown_project_services(project: &Project, tags: Option<Vec<&str>>) {
   }
 }
 
+/// Shuts down all services used by a component.
 pub fn shutdown_component_services(project: &Project, component_name: &str) {
   if let Some(c) = project.components.iter().find(|x| x.name == component_name) {
     for service_name in &c.services {
       if let Some(service) = project.service_by_name(&service_name) {
-        let name = service.container.unwrap_or(service.name.clone());
-        ui::system_message(format!("Stopping service {}", &service.name));
+        let name = service.get_container_name();
+        ui::system_message(format!("Stopping service {}", &name));
         if let Err(e) = stop_container(&name) {
           ui::system_error(format!("Could not stop service {}: {}", &service.name, e))
         }
