@@ -22,7 +22,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .short("c")
         .long("config")
         .value_name("FILE")
-        .default_value("conductor.yml")
         .help("The conductor project configuration")
         .takes_value(true),
     )
@@ -98,13 +97,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   let matches = args.get_matches();
+  if let Err(e) = run(matches) {
+    println!("Error: {}", e)
+  }
+  Ok(())
+}
 
+fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
   let config_fp = match matches.value_of("config") {
-    Some(fp) => Some(fp.into()),
+    Some(fp_str) => {
+      let fp: PathBuf = fp_str.into();
+      if fp.is_file() {
+        Some(fp)
+      } else {
+        None
+      }
+    }
     None => find_config("conductor.yml"),
   }
   .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "config not found"))?;
-
   let project = Project::load(&config_fp)?;
 
   // Dynamic subcommands
