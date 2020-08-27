@@ -556,7 +556,7 @@ mod test {
     std::env::set_var("env1", "one");
     env.insert("env2".into(), "%env1%two".into());
     project.components[0].env = env;
-    project.components[0].start.args = vec!["-c".into(), "echo $env2".into()];
+    project.components[0].start = create_echo_command("$env2");
 
     let _ = spawn_component(
       &project,
@@ -582,7 +582,7 @@ mod test {
     env.insert("env1".into(), "one".into());
     env.insert("env2".into(), "two".into());
     project.components[0].env = env;
-    project.components[0].start.args = vec!["-c".into(), "echo $env1".into()];
+    project.components[0].start = create_echo_command("$env1");
 
     let _ = spawn_component(
       &project,
