@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq, Debug)]
 pub enum TerminalColor {
   Blue,
   Green,
@@ -21,7 +21,7 @@ impl Default for TerminalColor {
   }
 }
 
-#[derive(Clone, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 pub struct Component {
   pub name: String,

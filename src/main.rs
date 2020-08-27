@@ -1,5 +1,5 @@
 use clap::{App, Arg, SubCommand};
-use conductor::{run_component, run_components, run_project, setup_project, ui, Project};
+use conductor::{run_components, run_project, setup_project, ui, Project};
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -132,7 +132,12 @@ fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::err
     .find(|x| x.name == matches.subcommand().0)
   {
     root_path.pop();
-    if let Err(e) = run_component(&project, &root_path, &direct_cmp.name) {
+    if let Err(e) = run_components(
+      &project,
+      &root_path,
+      vec![direct_cmp.name.clone()],
+      HashMap::new(),
+    ) {
       ui::system_error(format!("{}", e))
     }
     return Ok(());

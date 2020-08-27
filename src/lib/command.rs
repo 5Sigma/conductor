@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt;
 
-#[derive(Clone, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq, Debug)]
 pub struct Command {
   pub command: String,
   #[serde(default)]

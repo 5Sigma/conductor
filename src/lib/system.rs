@@ -13,11 +13,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Debug)]
-pub enum ProjectError {
-  Io(io::Error),
-}
-
+/// The general error returned by various functions in the system module.
 #[derive(Debug)]
 pub struct SystemError {
   message: String,
@@ -43,11 +39,61 @@ impl std::error::Error for SystemError {
   }
 }
 
-/// Used to send out the output stream for a running component. Holds a copy of the component itself as well
-/// as the output text.
-pub struct ComponentMessage {
-  component: Component,
-  body: String,
+#[derive(Debug, PartialEq)]
+pub enum ComponentEventBody {
+  Output { body: String },
+  ComponentStart,
+  ComponentShutdown,
+  ServiceStart { service_name: String },
+  ServiceShutdown { service_name: String },
+  ComponentError { body: String },
+}
+
+/// Used to send events from a running component. Holds a copy of the component itself as well
+/// as the event that occured.
+#[derive(Debug, PartialEq)]
+pub struct ComponentEvent {
+  pub component: Component,
+  pub body: ComponentEventBody,
+}
+
+impl ComponentEvent {
+  pub fn output(component: Component, body: String) -> Self {
+    ComponentEvent {
+      component,
+      body: ComponentEventBody::Output { body },
+    }
+  }
+  pub fn error(component: Component, body: String) -> Self {
+    ComponentEvent {
+      component,
+      body: ComponentEventBody::ComponentError { body },
+    }
+  }
+  pub fn start(component: Component) -> Self {
+    ComponentEvent {
+      component,
+      body: ComponentEventBody::ComponentStart,
+    }
+  }
+  pub fn shutdown(component: Component) -> Self {
+    ComponentEvent {
+      component,
+      body: ComponentEventBody::ComponentShutdown,
+    }
+  }
+  pub fn service_start(component: Component, service_name: String) -> Self {
+    ComponentEvent {
+      component,
+      body: ComponentEventBody::ServiceStart { service_name },
+    }
+  }
+  pub fn service_shutdown(component: Component, service_name: String) -> Self {
+    ComponentEvent {
+      component,
+      body: ComponentEventBody::ServiceShutdown { service_name },
+    }
+  }
 }
 
 /// Worker is used to encapsulate a reference to a running component.
@@ -139,7 +185,7 @@ fn create_command(
 fn spawn_component(
   project: &Project,
   component: &Component,
-  data_tx: Sender<ComponentMessage>,
+  data_tx: Sender<ComponentEvent>,
   root_path: &PathBuf,
   env: HashMap<String, String>,
 ) -> Result<Worker, SystemError> {
@@ -151,14 +197,24 @@ fn spawn_component(
   for service_name in &c.services {
     if let Some(service) = project.service_by_name(&service_name.clone()) {
       match start_container(&service.get_container_name()) {
-        Ok(_) => ui::system_message(format!("Started service {}", &service.name)),
-        Err(e) => ui::system_error(format!("Error starting service {}: {}", &service.name, e)),
-      }
+        Ok(_) => {
+          let _ = data_tx.send(ComponentEvent::service_start(
+            c.clone(),
+            service_name.clone(),
+          ));
+        }
+        Err(e) => {
+          let _ = data_tx.send(ComponentEvent::error(
+            c.clone(),
+            format!("Error starting service {}: {}", &service.name, e),
+          ));
+        }
+      };
     } else {
-      ui::system_error(format!(
-        "Could not find service definition: {}",
-        service_name
-      ))
+      let _ = data_tx.send(ComponentEvent::error(
+        c.clone(),
+        format!("Could not find service definition: {}", service_name),
+      ));
     }
   }
 
@@ -181,13 +237,12 @@ fn spawn_component(
         .spawn()
         .map_err(|e| SystemError::new(&format!("Could not spawn process: {}", e)))?;
 
+      let _ = data_tx.send(ComponentEvent::start(c.clone()));
+
       let buf = get_buff_reader(reader);
       let _ = buf.lines().try_for_each(|line| match line {
         Ok(body) => {
-          let payload = ComponentMessage {
-            component: c.clone(),
-            body,
-          };
+          let payload = ComponentEvent::output(c.clone(), body);
           if let Err(e) = data_tx.send(payload) {
             println!("Error sending output: {}", e)
           }
@@ -203,7 +258,10 @@ fn spawn_component(
         Err(_) => match rx.try_recv() {
           Ok(_) | Err(crossbeam::channel::TryRecvError::Disconnected) => {
             if let Err(e) = child.kill() {
-              ui::system_error(format!("Could not kill process: {}", e));
+              let _ = data_tx.send(ComponentEvent::error(
+                c.clone(),
+                format!("Could not kill process: {}", e),
+              ));
             }
             retry = false;
             Err(())
@@ -213,7 +271,7 @@ fn spawn_component(
       });
 
       drop(child);
-      ui::system_message(format!("Component shutdown: {}", &c.name));
+      let _ = data_tx.send(ComponentEvent::shutdown(c.clone()));
 
       match rx.try_recv() {
         Ok(_) | Err(crossbeam::channel::TryRecvError::Disconnected) => {
@@ -221,15 +279,9 @@ fn spawn_component(
         }
         Err(crossbeam::channel::TryRecvError::Empty) => {}
       }
-
       if !retry {
         break Ok(());
       }
-      ui::system_message(format!(
-        "Restarting {} in {} seconds",
-        &c.name,
-        c.delay.unwrap_or(1)
-      ));
       thread::sleep(Duration::from_secs(c.delay.unwrap_or(1)));
     }
   });
@@ -296,49 +348,6 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
   run_components(&project, &root_path, component_names, HashMap::new())
 }
 
-/// runs a specific component by name.
-pub fn run_component(
-  project: &Project,
-  root_path: &PathBuf,
-  component_name: &str,
-) -> Result<(), SystemError> {
-  let running = Arc::new(AtomicBool::new(true));
-  let (tx, rx) = unbounded();
-  let c = project
-    .components
-    .iter()
-    .find(|x| x.name == component_name)
-    .ok_or_else(|| {
-      SystemError::new(&format!("No component definition for {}", &component_name,))
-    })?;
-
-  ui::system_message(format!("Component start: {}", &component_name));
-  let worker: Worker = spawn_component(&project, &c, tx, root_path, HashMap::new())
-    .map_err(|e| SystemError::new(&format!("Failed to spawn component: {}", e)))?;
-
-  let ksig = worker.kill_signal.clone();
-  let r = running.clone();
-  ctrlc::set_handler(move || {
-    r.store(false, Ordering::SeqCst);
-    let _ = ksig.send(());
-  })
-  .expect("Could not setup handler");
-
-  while running.load(Ordering::SeqCst) {
-    while let Ok(msg) = rx.recv_timeout(Duration::from_secs(1)) {
-      ui::component_message(&msg.component, msg.body)
-    }
-  }
-
-  if let Err(e) = worker.handler.join().unwrap() {
-    ui::system_error(format!("[Execution Error] {}", e));
-  } else {
-    ui::system_message(format!("Component shutdown: {}", &component_name));
-  }
-  shutdown_component_services(&project, component_name);
-  Ok(())
-}
-
 /// runs one or more components by name. An additional set of environment variables can
 /// be passed in that will override any existing component or command environment settings.
 pub fn run_components(
@@ -360,16 +369,15 @@ pub fn run_components(
 
   let workers: Vec<Worker> = components
     .iter()
-    .map(|c| {
-      ui::system_message(format!("Component start: {}", &c.name));
-      match spawn_component(&project, c, tx.clone(), root_path, env.clone()) {
+    .map(
+      |c| match spawn_component(&project, c, tx.clone(), root_path, env.clone()) {
         Ok(w) => Some(w),
         Err(e) => {
           ui::system_error(format!("Could not start {}: {}", &c.name, e));
           None
         }
-      }
-    })
+      },
+    )
     .filter_map(Option::Some)
     .map(|c| c.unwrap())
     .collect();
@@ -386,7 +394,27 @@ pub fn run_components(
 
   while running.load(Ordering::SeqCst) {
     while let Ok(msg) = rx.recv_timeout(Duration::from_secs(1)) {
-      ui::component_message(&msg.component, msg.body)
+      match msg.body {
+        ComponentEventBody::Output { body } => ui::component_message(&msg.component, body),
+        ComponentEventBody::ServiceStart { service_name } => ui::system_message(format!(
+          "Starting service: {} for {}",
+          service_name, &msg.component.name
+        )),
+        ComponentEventBody::ServiceShutdown { service_name } => ui::system_message(format!(
+          "Shutting down service: {} for {}",
+          service_name, &msg.component.name
+        )),
+        ComponentEventBody::ComponentError { body } => ui::system_error(format!(
+          "Component error [{}]: {}",
+          &msg.component.name, body
+        )),
+        ComponentEventBody::ComponentStart => {
+          ui::system_message(format!("Component started: {}", &msg.component.name))
+        }
+        ComponentEventBody::ComponentShutdown => {
+          ui::system_message(format!("Component shutdown: {}", &msg.component.name))
+        }
+      }
     }
   }
 
@@ -464,6 +492,7 @@ pub fn shutdown_component_services(project: &Project, component_name: &str) {
 #[cfg(test)]
 mod test {
   use super::spawn_component;
+  use super::{ComponentEvent, ComponentEventBody};
   use crate::{Command, Component, Project};
   use std::collections::HashMap;
   use std::path::PathBuf;
@@ -494,6 +523,20 @@ mod test {
     }
   }
 
+  fn get_output(events: Vec<ComponentEvent>) -> Vec<String> {
+    events
+      .into_iter()
+      .map(|i| {
+        if let ComponentEventBody::Output { body } = &i.body {
+          body.clone()
+        } else {
+          "".into()
+        }
+      })
+      .filter(|i| i != "")
+      .collect()
+  }
+
   #[test]
   fn test_component_level_env_expansion() {
     let (tx, rx) = crossbeam::channel::unbounded();
@@ -513,10 +556,10 @@ mod test {
       HashMap::new(),
     );
 
-    match rx.recv() {
-      Ok(msg) => assert_eq!(msg.body, "onetwo"),
-      Err(e) => assert!(false, "{}", e),
-    }
+    let msgs: Vec<ComponentEvent> = rx.recv().into_iter().collect();
+    let lines = get_output(msgs);
+
+    assert_eq!(lines[0], "onetwo");
   }
 
   #[test]
@@ -538,10 +581,10 @@ mod test {
       HashMap::new(),
     );
 
-    match rx.recv() {
-      Ok(msg) => assert_eq!(msg.body, "one"),
-      Err(e) => assert!(false, "{}", e),
-    }
+    let msgs: Vec<ComponentEvent> = rx.recv().into_iter().collect();
+    let lines = get_output(msgs);
+
+    assert_eq!(lines[0], "one");
   }
 
   #[test]
@@ -562,10 +605,12 @@ mod test {
       &root_path,
       HashMap::new(),
     )?;
-    match rx.recv() {
-      Ok(msg) => assert_eq!(msg.body, "some echo"),
-      Err(e) => assert!(false, "{}", e),
-    }
+
+    let msgs: Vec<ComponentEvent> = rx.recv().into_iter().collect();
+    let lines = get_output(msgs);
+
+    assert_eq!(lines[0], "some echo");
+
     Ok(())
   }
 }
