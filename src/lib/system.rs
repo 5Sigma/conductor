@@ -1,4 +1,5 @@
 use crate::{ui, Component, Project};
+use crossbeam::channel::{unbounded, Sender};
 #[cfg(not(target_os = "windows"))]
 use rs_docker::Docker;
 use std::collections::HashMap;
@@ -8,7 +9,6 @@ use std::io::{BufReader, Error};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -142,9 +142,9 @@ fn spawn_component(
   data_tx: Sender<ComponentMessage>,
   root_path: &PathBuf,
   env: HashMap<String, String>,
-) -> Result<Worker, Error> {
+) -> Result<Worker, SystemError> {
   let data_tx = data_tx;
-  let (tx, rx) = mpsc::channel();
+  let (tx, rx) = unbounded();
   let c = component.clone();
   let rp = root_path.clone();
 
@@ -164,12 +164,12 @@ fn spawn_component(
 
   let th = thread::spawn(move || -> Result<(), SystemError> {
     loop {
-      let mut cmd = create_command(&c.start, &c, &rp, env.to_owned());
       let mut retry = c.retry;
       if let Some(delay) = c.delay {
         thread::sleep(Duration::from_secs(delay));
       }
 
+      let mut cmd = create_command(&c.start, &c, &rp, env.to_owned());
       let mut child: std::process::Child = cmd
         .stdout(Stdio::piped())
         .spawn()
@@ -191,33 +191,33 @@ fn spawn_component(
             println!("Error sending output: {}", e)
           }
           match rx.try_recv() {
-            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+            Ok(_) | Err(crossbeam::channel::TryRecvError::Disconnected) => {
               retry = false;
               let _ = child.kill();
               Err(())
             }
-            Err(mpsc::TryRecvError::Empty) => Ok(()),
+            Err(crossbeam::channel::TryRecvError::Empty) => Ok(()),
           }
         }
         Err(_) => match rx.try_recv() {
-          Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+          Ok(_) | Err(crossbeam::channel::TryRecvError::Disconnected) => {
             if let Err(e) = child.kill() {
               ui::system_error(format!("Could not kill process: {}", e));
             }
             retry = false;
             Err(())
           }
-          Err(mpsc::TryRecvError::Empty) => Ok(()),
+          Err(crossbeam::channel::TryRecvError::Empty) => Ok(()),
         },
       });
 
       ui::system_message(format!("Component shutdown: {}", &c.name));
 
       match rx.try_recv() {
-        Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {
+        Ok(_) | Err(crossbeam::channel::TryRecvError::Disconnected) => {
           retry = false;
         }
-        Err(mpsc::TryRecvError::Empty) => {}
+        Err(crossbeam::channel::TryRecvError::Empty) => {}
       }
 
       if !retry {
@@ -277,29 +277,31 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
   let has_tags = tags.is_some();
   let component_names: Vec<String> = match tags {
     Some(t) => project
+      .clone()
       .components
       .into_iter()
       .filter(|x| x.has_tag(&t.clone()) || (!has_tags && x.default))
-      .map(|x| x.name)
+      .map(|x| x.name.clone())
       .collect(),
     None => project
+      .clone()
       .components
       .into_iter()
       .filter(|x| x.default)
       .map(|x| x.name)
       .collect(),
   };
-  run_components(fname, component_names, HashMap::new())
+  run_components(&project, &root_path, component_names, HashMap::new())
 }
 
 /// runs a specific component by name.
-pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), SystemError> {
+pub fn run_component(
+  project: &Project,
+  root_path: &PathBuf,
+  component_name: &str,
+) -> Result<(), SystemError> {
   let running = Arc::new(AtomicBool::new(true));
-  let (tx, rx) = mpsc::channel();
-  let mut fname = fname.clone();
-  let project = Project::load(&fname)
-    .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
-  fname.pop();
+  let (tx, rx) = unbounded();
   let c = project
     .components
     .iter()
@@ -309,7 +311,7 @@ pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), System
     })?;
 
   ui::system_message(format!("Component start: {}", &component_name));
-  let worker: Worker = spawn_component(&project, &c, tx, &fname, HashMap::new())
+  let worker: Worker = spawn_component(&project, &c, tx, root_path, HashMap::new())
     .map_err(|e| SystemError::new(&format!("Failed to spawn component: {}", e)))?;
 
   let ksig = worker.kill_signal.clone();
@@ -338,16 +340,13 @@ pub fn run_component(fname: &PathBuf, component_name: &str) -> Result<(), System
 /// runs one or more components by name. An additional set of environment variables can
 /// be passed in that will override any existing component or command environment settings.
 pub fn run_components(
-  fname: &PathBuf,
+  project: &Project,
+  root_path: &PathBuf,
   component_names: Vec<String>,
   env: HashMap<String, String>,
 ) -> Result<(), SystemError> {
   let running = Arc::new(AtomicBool::new(true));
-  let (tx, rx) = mpsc::channel();
-  let mut fname = fname.clone();
-  let project = Project::load(&fname)
-    .map_err(|e| SystemError::new(&format!("Failed to load project definition: {}", e)))?;
-  fname.pop();
+  let (tx, rx) = unbounded();
   let components: Vec<&Component> = project
     .components
     .iter()
@@ -361,7 +360,7 @@ pub fn run_components(
     .iter()
     .map(|c| {
       ui::system_message(format!("Component start: {}", &c.name));
-      match spawn_component(&project, c, tx.clone(), &fname, env.clone()) {
+      match spawn_component(&project, c, tx.clone(), root_path, env.clone()) {
         Ok(w) => Some(w),
         Err(e) => {
           ui::system_error(format!("Could not start {}: {}", &c.name, e));
@@ -400,30 +399,20 @@ pub fn run_components(
 }
 
 /// sets up a project from scratch. Clones the specfied repos for all components and runs all init commands.
-pub fn setup_project(fname: &PathBuf) {
-  match Project::load(&fname) {
-    Err(e) => {
-      ui::system_error("Could not load project".into());
-      println!("{}", e);
-    }
-    Ok(project) => {
-      let mut root_path = fname.clone();
-      root_path.pop();
-      for cmp in project.components.into_iter() {
-        let mut cmp_path = root_path.clone();
-        cmp_path.push(cmp.get_path());
-        match cmp.clone_repo(&cmp_path) {
-          Ok(_) => {
-            ui::system_message(format!("{} cloned", cmp.clone().name));
-            for cmd in &cmp.init {
-              run_command(&cmd, &cmp, &root_path);
-            }
-          }
-          Err(e) => ui::system_error(format!("Skipping clone: {}", e)),
+pub fn setup_project(project: &Project, root_path: &PathBuf) {
+  for cmp in project.components.iter() {
+    let mut cmp_path = root_path.clone();
+    cmp_path.push(cmp.get_path());
+    match cmp.clone_repo(&cmp_path) {
+      Ok(_) => {
+        ui::system_message(format!("{} cloned", cmp.clone().name));
+        for cmd in &cmp.init {
+          run_command(&cmd, &cmp, &root_path);
         }
       }
+      Err(e) => ui::system_error(format!("Skipping clone: {}", e)),
     }
-  };
+  }
 }
 
 /// returns a list of all components in the project.
@@ -467,5 +456,54 @@ pub fn shutdown_component_services(project: &Project, component_name: &str) {
         }
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use super::spawn_component;
+  use crate::{Command, Component, Project};
+  use std::path::PathBuf;
+
+  fn create_echo_command(echo: &str) -> Command {
+    Command {
+      command: "sh".into(),
+      args: vec!["-c".into(), format!("echo {}", echo).into()],
+      ..Command::default()
+    }
+  }
+  fn create_component(name: &str, cmd: Command) -> Component {
+    Component {
+      name: name.into(),
+      path: Some("./".into()),
+      start: cmd,
+      ..Component::default()
+    }
+  }
+
+  #[test]
+  fn test_spawn_component() -> Result<(), Box<dyn std::error::Error>> {
+    use std::collections::HashMap;
+    let project = Project {
+      components: vec![create_component(
+        "testcomponent",
+        create_echo_command("some echo"),
+      )],
+      ..Project::default()
+    };
+    let root_path: PathBuf = ".".into();
+    let (tx, rx) = crossbeam::channel::unbounded();
+    let _ = spawn_component(
+      &project,
+      &project.components[0],
+      tx,
+      &root_path,
+      HashMap::new(),
+    )?;
+    match rx.recv() {
+      Ok(msg) => assert_eq!(msg.body, "some echo"),
+      Err(e) => assert!(false, "{}", e),
+    }
+    Ok(())
   }
 }
