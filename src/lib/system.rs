@@ -5,7 +5,7 @@ use rs_docker::Docker;
 use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
-use std::io::{BufReader, Error};
+use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -83,7 +83,7 @@ pub fn stop_container(name: &str) -> io::Result<String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
+pub fn get_buff_reader(out: os_pipe::PipeReader) -> Box<dyn BufRead> {
   Box::new(BufReader::new(timeout_readwrite::TimeoutReader::new(
     out,
     Duration::new(1, 0),
@@ -91,7 +91,7 @@ pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn get_buff_reader(out: std::process::ChildStdout) -> Box<dyn BufRead> {
+pub fn get_buff_reader(out: os_pipe::PipeReader) -> Box<dyn BufRead> {
   Box::new(BufReader::new(out))
 }
 
@@ -170,17 +170,18 @@ fn spawn_component(
       }
 
       let mut cmd = create_command(&c.start, &c, &rp, env.to_owned());
+      let (reader, writer) = os_pipe::pipe()
+        .map_err(|_| SystemError::new(&format!("Could not open stdout/err pipe")))?;
+      let writer_clone = writer
+        .try_clone()
+        .map_err(|_| SystemError::new("Could not clone output pipe"))?;
       let mut child: std::process::Child = cmd
-        .stdout(Stdio::piped())
+        .stdout(writer)
+        .stderr(writer_clone)
         .spawn()
         .map_err(|e| SystemError::new(&format!("Could not spawn process: {}", e)))?;
 
-      let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| SystemError::new("Could not create process pipe"))?;
-
-      let buf = get_buff_reader(stdout);
+      let buf = get_buff_reader(reader);
       let _ = buf.lines().try_for_each(|line| match line {
         Ok(body) => {
           let payload = ComponentMessage {
@@ -211,6 +212,7 @@ fn spawn_component(
         },
       });
 
+      drop(child);
       ui::system_message(format!("Component shutdown: {}", &c.name));
 
       match rx.try_recv() {
