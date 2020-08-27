@@ -497,6 +497,16 @@ mod test {
   use std::collections::HashMap;
   use std::path::PathBuf;
 
+  #[cfg(not(target_os = "windows"))]
+  fn env_str(e: &str) -> String {
+    format!("${}", e)
+  }
+
+  #[cfg(target_os = "windows")]
+  fn env_str(e: &str) -> String {
+    format!("%{}%", e)
+  }
+
   #[cfg(target_os = "windows")]
   fn create_echo_command(echo: &str) -> Command {
     Command {
@@ -556,7 +566,7 @@ mod test {
     std::env::set_var("env1", "one");
     env.insert("env2".into(), "%env1%two".into());
     project.components[0].env = env;
-    project.components[0].start = create_echo_command("$env2");
+    project.components[0].start = create_echo_command(&env_str("env2"));
 
     let _ = spawn_component(
       &project,
@@ -582,7 +592,7 @@ mod test {
     env.insert("env1".into(), "one".into());
     env.insert("env2".into(), "two".into());
     project.components[0].env = env;
-    project.components[0].start = create_echo_command("$env1");
+    project.components[0].start = create_echo_command(&env_str("env1"));
 
     let _ = spawn_component(
       &project,
