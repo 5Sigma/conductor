@@ -497,6 +497,16 @@ mod test {
   use std::collections::HashMap;
   use std::path::PathBuf;
 
+  #[cfg(target_os = "windows")]
+  fn create_echo_command(echo: &str) -> Command {
+    Command {
+      command: "cmd".into(),
+      args: vec!["/C".into(), format!("echo {}", echo).into()],
+      ..Command::default()
+    }
+  }
+
+  #[cfg(not(target_os = "windows"))]
   fn create_echo_command(echo: &str) -> Command {
     Command {
       command: "sh".into(),
