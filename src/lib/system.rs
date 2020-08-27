@@ -556,9 +556,10 @@ mod test {
       HashMap::new(),
     );
 
-    let msgs: Vec<ComponentEvent> = rx.recv().into_iter().collect();
+    let msgs: Vec<ComponentEvent> = rx.iter().collect();
+    assert_eq!(msgs.len(), 3);
     let lines = get_output(msgs);
-
+    assert_eq!(lines.len(), 1);
     assert_eq!(lines[0], "onetwo");
   }
 
@@ -581,9 +582,10 @@ mod test {
       HashMap::new(),
     );
 
-    let msgs: Vec<ComponentEvent> = rx.recv().into_iter().collect();
+    let msgs: Vec<ComponentEvent> = rx.iter().collect();
+    assert_eq!(msgs.len(), 3);
     let lines = get_output(msgs);
-
+    assert_eq!(lines.len(), 1);
     assert_eq!(lines[0], "one");
   }
 
@@ -606,9 +608,10 @@ mod test {
       HashMap::new(),
     )?;
 
-    let msgs: Vec<ComponentEvent> = rx.recv().into_iter().collect();
+    let msgs: Vec<ComponentEvent> = rx.iter().collect();
+    assert_eq!(msgs.len(), 3);
     let lines = get_output(msgs);
-
+    assert_eq!(lines.len(), 1);
     assert_eq!(lines[0], "some echo");
 
     Ok(())
