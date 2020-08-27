@@ -170,8 +170,8 @@ fn spawn_component(
       }
 
       let mut cmd = create_command(&c.start, &c, &rp, env.to_owned());
-      let (reader, writer) = os_pipe::pipe()
-        .map_err(|_| SystemError::new(&format!("Could not open stdout/err pipe")))?;
+      let (reader, writer) =
+        os_pipe::pipe().map_err(|_| SystemError::new("Could not open stdout/err pipe"))?;
       let writer_clone = writer
         .try_clone()
         .map_err(|_| SystemError::new("Could not clone output pipe"))?;
@@ -283,7 +283,7 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
       .components
       .into_iter()
       .filter(|x| x.has_tag(&t.clone()) || (!has_tags && x.default))
-      .map(|x| x.name.clone())
+      .map(|x| x.name)
       .collect(),
     None => project
       .clone()
@@ -465,6 +465,7 @@ pub fn shutdown_component_services(project: &Project, component_name: &str) {
 mod test {
   use super::spawn_component;
   use crate::{Command, Component, Project};
+  use std::collections::HashMap;
   use std::path::PathBuf;
 
   fn create_echo_command(echo: &str) -> Command {
@@ -483,9 +484,68 @@ mod test {
     }
   }
 
+  fn create_project() -> Project {
+    Project {
+      components: vec![create_component(
+        "testcomponent",
+        create_echo_command("some echo"),
+      )],
+      ..Project::default()
+    }
+  }
+
+  #[test]
+  fn test_component_level_env_expansion() {
+    let (tx, rx) = crossbeam::channel::unbounded();
+    let mut project = create_project();
+    let mut env = HashMap::new();
+    let root_path: PathBuf = ".".into();
+    std::env::set_var("env1", "one");
+    env.insert("env2".into(), "%env1%two".into());
+    project.components[0].env = env;
+    project.components[0].start.args = vec!["-c".into(), "echo $env2".into()];
+
+    let _ = spawn_component(
+      &project,
+      &project.components[0],
+      tx,
+      &root_path,
+      HashMap::new(),
+    );
+
+    match rx.recv() {
+      Ok(msg) => assert_eq!(msg.body, "onetwo"),
+      Err(e) => assert!(false, "{}", e),
+    }
+  }
+
+  #[test]
+  fn test_component_level_env() {
+    let (tx, rx) = crossbeam::channel::unbounded();
+    let mut project = create_project();
+    let mut env = HashMap::new();
+    let root_path: PathBuf = ".".into();
+    env.insert("env1".into(), "one".into());
+    env.insert("env2".into(), "two".into());
+    project.components[0].env = env;
+    project.components[0].start.args = vec!["-c".into(), "echo $env1".into()];
+
+    let _ = spawn_component(
+      &project,
+      &project.components[0],
+      tx,
+      &root_path,
+      HashMap::new(),
+    );
+
+    match rx.recv() {
+      Ok(msg) => assert_eq!(msg.body, "one"),
+      Err(e) => assert!(false, "{}", e),
+    }
+  }
+
   #[test]
   fn test_spawn_component() -> Result<(), Box<dyn std::error::Error>> {
-    use std::collections::HashMap;
     let project = Project {
       components: vec![create_component(
         "testcomponent",

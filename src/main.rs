@@ -103,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
-fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
+fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
   let config_fp = match matches.value_of("config") {
     Some(fp_str) => {
       let fp: PathBuf = fp_str.into();
@@ -122,7 +122,7 @@ fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std:
 
   // Dynamic subcommands
   let tags: Option<Vec<&str>> = match matches.value_of("tags") {
-    Some(tags_r) => Some(tags_r.split(',').map(|i| i).collect()),
+    Some(tags_r) => Some(tags_r.split(',').collect()),
     _ => None,
   };
 
