@@ -1,5 +1,5 @@
 use clap::{App, Arg, SubCommand};
-use conductor::{run_component, run_components, run_project, setup_project, ui, Project};
+use conductor::{run_components, run_project, setup_project, ui, Project};
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -103,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
-fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
+fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
   let config_fp = match matches.value_of("config") {
     Some(fp_str) => {
       let fp: PathBuf = fp_str.into();
@@ -117,10 +117,12 @@ fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std:
   }
   .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "config not found"))?;
   let project = Project::load(&config_fp)?;
+  let mut root_path = config_fp.clone();
+  root_path.pop();
 
   // Dynamic subcommands
   let tags: Option<Vec<&str>> = match matches.value_of("tags") {
-    Some(tags_r) => Some(tags_r.split(',').map(|i| i).collect()),
+    Some(tags_r) => Some(tags_r.split(',').collect()),
     _ => None,
   };
 
@@ -129,18 +131,26 @@ fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std:
     .iter()
     .find(|x| x.name == matches.subcommand().0)
   {
-    if let Err(e) = run_component(&config_fp, &direct_cmp.name) {
+    root_path.pop();
+    if let Err(e) = run_components(
+      &project,
+      &root_path,
+      vec![direct_cmp.name.clone()],
+      HashMap::new(),
+    ) {
       ui::system_error(format!("{}", e))
     }
     return Ok(());
   }
   if let Some(direct_group) = &project
+    .clone()
     .groups
     .into_iter()
     .find(|x| x.name == matches.subcommand().0)
   {
     if let Err(e) = run_components(
-      &config_fp,
+      &project,
+      &root_path,
       direct_group.components.to_owned(),
       direct_group.env.to_owned(),
     ) {
@@ -150,7 +160,7 @@ fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std:
   }
 
   match matches.subcommand() {
-    ("setup", _) => setup_project(&config_fp),
+    ("setup", _) => setup_project(&project, &root_path),
     ("run", Some(m)) => {
       let components: Vec<String> = m
         .values_of("component")
@@ -160,7 +170,7 @@ fn run<'a>(matches: clap::ArgMatches<'a>) -> Result<(), std::boxed::Box<dyn std:
         .map(String::from)
         .collect();
       if !components.is_empty() {
-        if let Err(e) = run_components(&config_fp, components, HashMap::new()) {
+        if let Err(e) = run_components(&project, &root_path, components, HashMap::new()) {
           ui::system_error(format!("{}", e))
         }
       } else if let Err(e) = run_project(&config_fp, tags.clone()) {
