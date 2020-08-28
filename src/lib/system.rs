@@ -334,7 +334,7 @@ pub fn run_project(fname: &PathBuf, tags: Option<Vec<&str>>) -> Result<(), Syste
       .clone()
       .components
       .into_iter()
-      .filter(|x| x.has_tag(&t.clone()) || (!has_tags && x.default))
+      .filter(|x| x.has_tags(&t.clone()) || (!has_tags && x.default))
       .map(|x| x.name)
       .collect(),
     None => project
@@ -464,7 +464,7 @@ pub fn shutdown_project_services(project: &Project, tags: Option<Vec<&str>>) {
       .clone()
       .components
       .into_iter()
-      .filter(|x| x.has_tag(&t.clone()))
+      .filter(|x| x.has_tags(&t.clone()))
       .collect(),
     None => project.clone().components,
   };

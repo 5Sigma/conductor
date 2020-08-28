@@ -1,10 +1,98 @@
 use clap::{App, Arg, SubCommand};
-use conductor::{run_components, run_project, setup_project, ui, Project};
-use std::collections::HashMap;
+use conductor::{setup_project, ui, Project};
 use std::env;
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let matches = handle_cli()?;
+  if let Err(e) = run(matches) {
+    println!("Error: {}", e)
+  }
+  Ok(())
+}
+
+fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
+  if matches.is_present("debug") {
+    let _ = simple_logger::init();
+  }
+  let config_fp = match matches.value_of("config") {
+    Some(fp_str) => {
+      let fp: PathBuf = fp_str.into();
+      if fp.is_file() {
+        Some(fp)
+      } else {
+        None
+      }
+    }
+    None => find_config("conductor.yml"),
+  }
+  .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "config not found"))?;
+  let mut project = Project::load(&config_fp)?;
+  let mut root_path = config_fp.clone();
+  root_path.pop();
+
+  // collect tags
+  let tags: Vec<&str> = match matches.value_of("tags") {
+    Some(tags_r) => tags_r.split(',').collect(),
+    _ => vec![],
+  };
+  project.filter_tags(&tags);
+
+  if let Ok(_) = project.run_names(vec![matches.subcommand().0.to_string()]) {
+    return Ok(());
+  }
+
+  match matches.subcommand() {
+    ("setup", _) => setup_project(&project, &root_path),
+    ("run", Some(m)) => {
+      let component_names: Vec<String> = m
+        .values_of("component")
+        .map(|c| c.collect())
+        .unwrap_or_else(Vec::new)
+        .into_iter()
+        .map(String::from)
+        .collect();
+      if component_names.is_empty() {
+        let _ = project.run_names(component_names);
+      } else {
+        if project.components.len() == 0 {
+          ui::system_error("No components to run".into());
+          return Ok(());
+        }
+        project.run();
+      }
+    }
+    _ => {
+      project.run();
+    }
+  };
+  Ok(())
+}
+
+fn find_config(config: &str) -> Option<PathBuf> {
+  env::current_dir()
+    .map(|dir| find_file(&dir, config))
+    .unwrap_or(None)
+}
+
+fn find_file(starting_directory: &Path, filename: &str) -> Option<PathBuf> {
+  let mut path: PathBuf = starting_directory.into();
+  let file = Path::new(&filename);
+
+  loop {
+    path.push(file);
+
+    if path.is_file() {
+      break Some(path);
+    }
+
+    if !(path.pop() && path.pop()) {
+      break None;
+    }
+  }
+}
+
+fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> {
   let version = format!(
     "{}.{}.{}{}",
     env!("CARGO_PKG_VERSION_MAJOR"),
@@ -24,6 +112,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .value_name("FILE")
         .help("The conductor project configuration")
         .takes_value(true),
+    )
+    .arg(
+      Arg::with_name("debug")
+        .short("v")
+        .long("debug")
+        .help("Enable debug logging")
     )
     .arg(
       Arg::with_name("tags")
@@ -95,116 +189,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       args.subcommands(group_commands)
     }
   };
-
-  let matches = args.get_matches();
-  if let Err(e) = run(matches) {
-    println!("Error: {}", e)
-  }
-  Ok(())
-}
-
-fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
-  let config_fp = match matches.value_of("config") {
-    Some(fp_str) => {
-      let fp: PathBuf = fp_str.into();
-      if fp.is_file() {
-        Some(fp)
-      } else {
-        None
-      }
-    }
-    None => find_config("conductor.yml"),
-  }
-  .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "config not found"))?;
-  let project = Project::load(&config_fp)?;
-  let mut root_path = config_fp.clone();
-  root_path.pop();
-
-  // Dynamic subcommands
-  let tags: Option<Vec<&str>> = match matches.value_of("tags") {
-    Some(tags_r) => Some(tags_r.split(',').collect()),
-    _ => None,
-  };
-
-  if let Some(direct_cmp) = &project
-    .components
-    .iter()
-    .find(|x| x.name == matches.subcommand().0)
-  {
-    root_path.pop();
-    if let Err(e) = run_components(
-      &project,
-      &root_path,
-      vec![direct_cmp.name.clone()],
-      HashMap::new(),
-    ) {
-      ui::system_error(format!("{}", e))
-    }
-    return Ok(());
-  }
-  if let Some(direct_group) = &project
-    .clone()
-    .groups
-    .into_iter()
-    .find(|x| x.name == matches.subcommand().0)
-  {
-    if let Err(e) = run_components(
-      &project,
-      &root_path,
-      direct_group.components.to_owned(),
-      direct_group.env.to_owned(),
-    ) {
-      ui::system_error(format!("{}", e))
-    }
-    return Ok(());
-  }
-
-  match matches.subcommand() {
-    ("setup", _) => setup_project(&project, &root_path),
-    ("run", Some(m)) => {
-      let components: Vec<String> = m
-        .values_of("component")
-        .map(|c| c.collect())
-        .unwrap_or_else(Vec::new)
-        .into_iter()
-        .map(String::from)
-        .collect();
-      if !components.is_empty() {
-        if let Err(e) = run_components(&project, &root_path, components, HashMap::new()) {
-          ui::system_error(format!("{}", e))
-        }
-      } else if let Err(e) = run_project(&config_fp, tags.clone()) {
-        ui::system_error(format!("{}", e))
-      }
-    }
-    _ => {
-      if let Err(e) = run_project(&config_fp, tags.clone()) {
-        ui::system_error(format!("{}", e))
-      }
-    }
-  };
-  Ok(())
-}
-
-fn find_config(config: &str) -> Option<PathBuf> {
-  env::current_dir()
-    .map(|dir| find_file(&dir, config))
-    .unwrap_or(None)
-}
-
-fn find_file(starting_directory: &Path, filename: &str) -> Option<PathBuf> {
-  let mut path: PathBuf = starting_directory.into();
-  let file = Path::new(&filename);
-
-  loop {
-    path.push(file);
-
-    if path.is_file() {
-      break Some(path);
-    }
-
-    if !(path.pop() && path.pop()) {
-      break None;
-    }
-  }
+  Ok(args.get_matches())
 }

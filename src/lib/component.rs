@@ -58,7 +58,10 @@ impl Default for Component {
 }
 
 impl Component {
-  pub fn has_tag(&self, tags: &[&str]) -> bool {
+  pub fn has_tags(&self, tags: &[&str]) -> bool {
+    if tags.len() == 0 {
+      return true;
+    }
     self.tags.iter().any(|a| tags.iter().any(|b| a == b))
   }
 
