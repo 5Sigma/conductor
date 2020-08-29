@@ -199,6 +199,9 @@ impl Project {
   pub fn setup(&self) {
     let supr = Supervisor::new(self);
     for cmp in self.components.iter() {
+      if cmp.repo.is_none() {
+        continue;
+      }
       let mut cmp_path = self.root_path.clone();
       cmp_path.push(cmp.get_path());
       let task = Task::new(&cmp.name, &cmp_path, cmp.init.clone(), cmp.env.clone());

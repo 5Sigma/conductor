@@ -145,9 +145,16 @@ impl Supervisor {
       // Execute the process and return a popen. This goes into an Arc and a mutex so the
       // kill signal can poll and kill, while we pass the reading stream into a seperate thread.
       //  We also setup a stream adapter and a bufreader to read out the data from the reading thread.
-      let popen = Arc::new(Mutex::new(exec.popen().unwrap()));
-      let stream = ReadOutAdapter(Arc::clone(&popen));
       let _ = data_sender.send(ComponentEvent::start(component.clone()));
+      let popen = match exec.popen() {
+        Ok(p) => Arc::new(Mutex::new(p)),
+        Err(e) => {
+          let _ = data_sender.send(ComponentEvent::error(component.clone(), format!("{}", e)));
+          let _ = data_sender.send(ComponentEvent::shutdown(component.clone()));
+          return;
+        }
+      };
+      let stream = ReadOutAdapter(Arc::clone(&popen));
       let reader = BufReader::new(stream);
 
       let sender = data_sender.clone();
@@ -259,11 +266,7 @@ impl Supervisor {
             crate::ui::component_message(&workers[index].component, body)
           }
           ComponentEventBody::ComponentStart => {
-            crate::ui::system_message(format!(
-              "Component started [{}] {}",
-              workers.len(),
-              msg.component.name
-            ));
+            crate::ui::system_message(format!("Component {} started", msg.component.name));
             debug!(
               "Current workers: {:?}",
               workers
@@ -280,7 +283,7 @@ impl Supervisor {
             crate::ui::system_message(format!("Service started {}", service_name))
           }
           ComponentEventBody::ComponentShutdown => {
-            crate::ui::system_message(format!("Component shutdown {}", msg.component.name));
+            crate::ui::system_message(format!("Component {} shutdown", msg.component.name));
             if msg.component.retry && !running_workers[index].completed {
               info!("component {} as retry enabled", &msg.component.name);
               // We need to drop workers here to release the lock because spawn_component will attempt to
