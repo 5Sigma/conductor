@@ -7,6 +7,7 @@ use std::io::BufReader;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use subprocess::{Exec, Redirection};
 
 pub struct Supervisor {
   workers: Arc<Mutex<Vec<Worker>>>,
@@ -59,7 +60,7 @@ impl Supervisor {
     }
 
     let component = component.clone();
-    let root_path = self.project.root_path.clone();
+    let mut root_path = self.project.root_path.clone();
 
     thread::spawn(move || {
       if let Some(delay) = component.delay {
@@ -68,82 +69,41 @@ impl Supervisor {
 
       // Build the start command
 
-      let mut cmd = std::process::Command::new(expand_env(&component.start.command));
       // Setup the environment variables
-      let mut env: HashMap<String, String> = HashMap::new();
+      let mut env: HashMap<_, _> = std::env::vars().collect();
       env.extend(component.env.clone());
-      env.extend(component.start.env.clone());
-      for (k, v) in env {
-        cmd.env(k, expand_env(&v));
-      }
+      let env_vars: Vec<(String, String)> = env.into_iter().map(|(k, v)| (k, v)).collect();
+      root_path.push(expand_env(component.get_path().to_str().unwrap()));
+      let exec = Exec::shell(component.start.clone())
+        .env_extend(&env_vars[..])
+        .cwd(root_path)
+        .stdout(Redirection::Pipe)
+        .stderr(Redirection::Merge);
 
-      // Process command arguments
-      for a in &component.start.args {
-        cmd.arg(expand_env(a));
-      }
-
-      let dir = component
-        .clone()
-        .start
-        .dir
-        .unwrap_or_else(|| component.get_path().to_str().unwrap_or("").into());
-      let mut root_path = root_path.clone();
-      root_path.push(expand_env(&dir));
-      cmd.current_dir(root_path);
-
-      // setup STDOUT and STDERR pipes
-
-      let (reader, writer) = match os_pipe::pipe() {
-        Ok((reader, writer)) => (reader, writer),
-        Err(e) => {
-          let _ = data_sender.send(ComponentEvent::error(
-            component.clone(),
-            format!("Could not open pipes: {}", e),
-          ));
-          return;
-        }
-      };
-      let writer_clone = match writer.try_clone() {
-        Ok(w) => w,
-        Err(e) => {
-          let _ = data_sender.send(ComponentEvent::error(
-            component.clone(),
-            format!("Could not open pipes: {}", e),
-          ));
-          return;
-        }
-      };
-
-      let mut child: std::process::Child = match cmd.stdout(writer).stderr(writer_clone).spawn() {
-        Ok(c) => c,
-        Err(e) => {
-          let _ = data_sender.send(ComponentEvent::error(
-            component.clone(),
-            format!("Could not spawn process: {}", e),
-          ));
-          return;
-        }
-      };
-
+      let stream = exec.clone().stream_stdout().unwrap();
+      let mut popen = exec.popen().unwrap();
       let _ = data_sender.send(ComponentEvent::start(component.clone()));
-      let buf = get_buff_reader(reader);
-      let _ = buf.lines().try_for_each(|line| match line {
-        Ok(body) => {
-          let _ = data_sender.send(ComponentEvent::output(component.clone(), body));
-          Ok(())
-        }
-        Err(_) => {
-          if let Ok(None) = child.try_wait() {
-            // Timeout occured while writing. Need to somehow figure out how to detect the child has excited here.
-            Ok(())
-          } else {
-            match kill_rx.try_recv() {
-              Ok(_) => Err(()),
-              Err(_) => Ok(()),
-            }
+      let reader = BufReader::new(stream);
+
+      let sender = data_sender.clone();
+      let cmp = component.clone();
+      std::thread::spawn(move || {
+        let _ = reader.lines().for_each(|line| {
+          if let Ok(body) = line {
+            let _ = sender.send(ComponentEvent::output(cmp.clone(), body));
           }
-        }
+        });
       });
+
+      loop {
+        if let Ok(Some(_)) = popen.wait_timeout(Duration::from_millis(400)) {
+          break;
+        }
+        if let Ok(()) = kill_rx.try_recv() {
+          break;
+        }
+      }
+      let _ = data_sender.send(ComponentEvent::shutdown(component.clone()));
     });
 
     let mut workers = self.workers.lock().unwrap();
@@ -207,15 +167,18 @@ impl Supervisor {
           ComponentEventBody::ServiceStart { service_name } => {
             crate::ui::system_message(format!("Service started {}", service_name))
           }
+          ComponentEventBody::ComponentShutdown => {
+            crate::ui::system_message(format!("Component shutdown {}", msg.component.name));
+            running_workers[index].running = false;
+            running_workers[index].completed = true;
+          }
         },
         Err(_) => {
           // The worker's data channel erorred/closed mark this worker as no longer running.
-          crate::ui::system_message(format!(
-            "Component shutdown {}",
-            running_workers[index].component.name
-          ));
+          info!("channel closed marking worker complete");
           running_workers[index].running = false;
           running_workers[index].completed = true;
+          let _ = running_workers[index].kill_signal.send(());
         }
       };
     });
@@ -260,7 +223,7 @@ struct Worker {
 enum ComponentEventBody {
   Output { body: String },
   ComponentStart,
-  // ComponentShutdown,
+  ComponentShutdown,
   ServiceStart { service_name: String },
   // ServiceShutdown { service_name: String },
   ComponentError { body: String },
@@ -293,12 +256,12 @@ impl ComponentEvent {
       body: ComponentEventBody::ComponentStart,
     }
   }
-  // pub fn shutdown(component: Component) -> Self {
-  //   ComponentEvent {
-  //     component,
-  //     body: ComponentEventBody::ComponentShutdown,
-  //   }
-  // }
+  pub fn shutdown(component: Component) -> Self {
+    ComponentEvent {
+      component,
+      body: ComponentEventBody::ComponentShutdown,
+    }
+  }
   pub fn service_start(component: Component, service_name: String) -> Self {
     ComponentEvent {
       component,
@@ -311,19 +274,6 @@ impl ComponentEvent {
   //     body: ComponentEventBody::ServiceShutdown { service_name },
   //   }
   // }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn get_buff_reader(out: os_pipe::PipeReader) -> Box<dyn BufRead> {
-  Box::new(BufReader::new(timeout_readwrite::TimeoutReader::new(
-    out,
-    Duration::new(1, 0),
-  )))
-}
-
-#[cfg(target_os = "windows")]
-pub fn get_buff_reader(out: os_pipe::PipeReader) -> Box<dyn BufRead> {
-  Box::new(BufReader::new(out))
 }
 
 /// Expands a string using environment variables.

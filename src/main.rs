@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::error::Error>> {
   if matches.is_present("debug") {
-    let _ = simple_logger::init();
+    let _ = simple_logger::init_with_level(log::Level::Debug);
   }
   let config_fp = match matches.value_of("config") {
     Some(fp_str) => {
@@ -52,8 +52,9 @@ fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::err
         .into_iter()
         .map(String::from)
         .collect();
-      if component_names.is_empty() {
+      if !component_names.is_empty() {
         let _ = project.run_names(component_names);
+        return Ok(());
       } else {
         if project.components.len() == 0 {
           ui::system_error("No components to run".into());
@@ -180,8 +181,8 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
       let group_commands: Vec<App> = project
         .groups
         .iter()
-        .map(|c| {
-          SubCommand::with_name(&*c.name)
+        .map(|g| {
+          SubCommand::with_name(&*g.name)
             .about("Run component group")
             .display_order(10)
         })
