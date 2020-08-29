@@ -30,7 +30,6 @@ impl Project {
     p.root_path = root_path;
     Ok(p)
   }
-  #[allow(dead_code)]
   pub fn service_by_name(&self, name: &str) -> Option<Service> {
     match self
       .services
@@ -99,12 +98,24 @@ impl Project {
       .collect()
   }
 
-  pub fn find_component_task(&self, name: &str) -> Option<Task> {
+  pub fn find_component_task(&self, name: &str) -> Option<(Component, Task)> {
     for c in self.components.iter() {
       for (task_name, cmds) in c.tasks.clone().into_iter() {
         if name.to_lowercase() == format!("{}:{}", c.name, task_name).to_lowercase() {
-          return Some(Task::new(name, &c.get_path(), cmds, c.env.clone()));
+          return Some((
+            c.clone(),
+            Task::new(name, &c.get_path(), cmds, c.env.clone()),
+          ));
         }
+      }
+    }
+    None
+  }
+
+  pub fn find_project_task(&self, name: &str) -> Option<Task> {
+    for (task_name, cmds) in self.tasks.clone().into_iter() {
+      if name.to_lowercase() == task_name.to_lowercase() {
+        return Some(Task::new(name, &self.root_path, cmds, HashMap::new()));
       }
     }
     None
@@ -119,14 +130,38 @@ impl Project {
   }
 
   pub fn run_names(&self, names: Vec<String>) -> Result<(), String> {
+    // If a component was ran we need to invoke Supervisor::init at the end
     let mut cmp_running = false;
+    // If a task has was ran we wont invoke Supervisor::init but we will still respond
+    // that we have handled the operation so that we dont default to running everything in the project
     let mut task_running = false;
     let supr = Supervisor::new(self);
 
     for name in names.iter() {
-      if let Some(task) = self.find_component_task(name) {
+      if let Some(task) = self.find_project_task(name) {
         let t = task.clone();
         for cmd in task {
+          supr.run_task_command(&t, cmd.clone());
+        }
+        task_running = true;
+        continue;
+      }
+    }
+
+    for name in names.iter() {
+      if let Some((component, task)) = self.find_component_task(name) {
+        let t = task.clone();
+        for cmd in task {
+          supr
+            .run_component_services(&component)
+            .for_each(|result| match result {
+              Ok(s) => {
+                crate::ui::system_message(format!("Starting service: {}", s.name));
+              }
+              Err((s, e)) => {
+                crate::ui::system_message(format!("Could not start service [{}]: {}", s.name, e));
+              }
+            });
           supr.run_task_command(&t, cmd.clone());
         }
         task_running = true;

@@ -179,19 +179,44 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
 
       let mut cmds: Vec<App> = vec![];
 
-      for c in project.components.iter() {
+      // PROJECT LEVEL TASKS
+      if !project.tasks.is_empty() {
+        cmds.push(SubCommand::with_name("   ").display_order(1000));
+      }
+
+      for (name, _) in project.tasks.iter() {
         cmds.push(
-          SubCommand::with_name(&*c.name)
-            .about("Run component")
-            .display_order(10),
+          SubCommand::with_name(name)
+            .display_order(1001)
+            .about("Run project task"),
         );
+      }
+
+      // GROUPS
+
+      if !project.groups.is_empty() {
+        cmds.push(SubCommand::with_name("   ").display_order(1002));
       }
 
       for g in project.groups.iter() {
         cmds.push(
           SubCommand::with_name(&*g.name)
             .about("Run component group")
-            .display_order(10),
+            .display_order(1003),
+        );
+      }
+
+      // COMPONENTS && COMPONENT TASKS
+
+      if !project.components.is_empty() {
+        cmds.push(SubCommand::with_name("   ").display_order(1004));
+      }
+
+      for c in project.components.iter() {
+        cmds.push(
+          SubCommand::with_name(&*c.name)
+            .display_order(1005)
+            .about("Run component"),
         );
       }
 
@@ -200,7 +225,7 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
           cmds.push(
             SubCommand::with_name(&format!("{}:{}", &component.name, &task))
               .about("Run component task")
-              .display_order(10),
+              .display_order(1005),
           );
         }
       }
