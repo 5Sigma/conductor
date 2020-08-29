@@ -19,12 +19,15 @@ impl Read for ReadOutAdapter {
   }
 }
 
+/// Supervisor controls the exection of tasks and components. It handles launching them,
+/// tracking them, relaunching them on failure, and managing all the reading threads.
 pub struct Supervisor {
   workers: Arc<Mutex<Vec<Worker>>>,
   project: Project,
 }
 
 impl Supervisor {
+  /// Sets up a new supervisor instance.
   pub fn new(project: &Project) -> Self {
     Supervisor {
       workers: Arc::new(Mutex::new(vec![])),
@@ -32,12 +35,7 @@ impl Supervisor {
     }
   }
 
-  pub fn spawn_component_by_name(&self, name: &str) {
-    if let Some(c) = self.project.find_component(name) {
-      self.spawn_component(c, HashMap::new());
-    }
-  }
-
+  /// Returns an iterator that will run all services that a component depends on.
   pub fn run_component_services(&self, component: &Component) -> crate::service::ServiceLauncher {
     let services = component
       .services
@@ -48,6 +46,8 @@ impl Supervisor {
     crate::service::ServiceLauncher::new(services)
   }
 
+  /// Runs a single command for a task. This is a blocking operation
+  /// tasks are not run in parallel.
   pub fn run_task_command(&self, task: &Task, cmd: String) {
     let mut root_path = self.project.root_path.clone();
     root_path.push(expand_env(task.path.to_str().unwrap()));
@@ -72,6 +72,10 @@ impl Supervisor {
     });
   }
 
+  /// Spawns a component by creating a shell and running its start command. Sets up a thread
+  /// for reading the output and a thred for minitoring for kill signals.
+  /// This also creates a worker instance and sets up the pipeline for events to be read from
+  /// Supervisor::init()
   pub fn spawn_component(&self, component: &Component, extra_env: HashMap<String, String>) {
     let (data_sender, data_receiver) = unbounded();
     let (kill_tx, kill_rx) = unbounded();
@@ -171,6 +175,9 @@ impl Supervisor {
     workers.push(worker);
   }
 
+  /// Starts the main run loop for the launched components.
+  /// Begins a blocking read of all events comming from all components and outputing them through
+  /// the ui module. Retriable components will also be relaunched here.
   pub fn init(&self) {
     let workers_lock = Arc::clone(&self.workers);
     let running = Arc::new(AtomicBool::new(true));

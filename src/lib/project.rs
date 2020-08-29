@@ -72,33 +72,21 @@ impl Project {
       .collect();
   }
 
-  pub fn find_component(&self, name: &str) -> Option<&Component> {
+  fn find_component(&self, name: &str) -> Option<&Component> {
     self
       .components
       .iter()
       .find(|c| c.name.to_lowercase() == name.to_lowercase())
   }
 
-  pub fn find_group(&self, name: &str) -> Option<&Group> {
+  fn find_group(&self, name: &str) -> Option<&Group> {
     self
       .groups
       .iter()
       .find(|g| g.name.to_lowercase() == name.to_lowercase())
   }
 
-  pub fn find_components(&self, names: Vec<String>) -> Vec<&Component> {
-    self
-      .components
-      .iter()
-      .filter(|c| {
-        names
-          .iter()
-          .all(|n| c.name.to_lowercase() != n.to_lowercase())
-      })
-      .collect()
-  }
-
-  pub fn find_component_task(&self, name: &str) -> Option<(Component, Task)> {
+  fn find_component_task(&self, name: &str) -> Option<(Component, Task)> {
     for c in self.components.iter() {
       for (task_name, cmds) in c.tasks.clone().into_iter() {
         if name.to_lowercase() == format!("{}:{}", c.name, task_name).to_lowercase() {
@@ -112,7 +100,7 @@ impl Project {
     None
   }
 
-  pub fn find_project_task(&self, name: &str) -> Option<Task> {
+  fn find_project_task(&self, name: &str) -> Option<Task> {
     for (task_name, cmds) in self.tasks.clone().into_iter() {
       if name.to_lowercase() == task_name.to_lowercase() {
         return Some(Task::new(name, &self.root_path, cmds, HashMap::new()));
