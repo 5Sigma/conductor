@@ -43,7 +43,6 @@ impl Supervisor {
       .services
       .iter()
       .map(|sn| self.project.service_by_name(sn))
-      .into_iter()
       .flatten()
       .collect();
     crate::service::ServiceLauncher::new(services)
