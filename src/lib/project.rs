@@ -139,19 +139,29 @@ impl Project {
     for name in names.iter() {
       if let Some((component, task)) = self.find_component_task(name) {
         let t = task.clone();
+        supr
+          .run_component_services(&component)
+          .for_each(|result| match result {
+            Ok(s) => {
+              crate::ui::system_message(format!("Started service: {}", s.name));
+            }
+            Err((s, e)) => {
+              crate::ui::system_message(format!("Could not start service [{}]: {}", s.name, e));
+            }
+          });
         for cmd in task {
-          supr
-            .run_component_services(&component)
-            .for_each(|result| match result {
-              Ok(s) => {
-                crate::ui::system_message(format!("Starting service: {}", s.name));
-              }
-              Err((s, e)) => {
-                crate::ui::system_message(format!("Could not start service [{}]: {}", s.name, e));
-              }
-            });
           supr.run_task_command(&t, cmd.clone());
         }
+        supr
+          .shutdown_component_services(&component)
+          .for_each(|result| match result {
+            Ok(s) => {
+              crate::ui::system_message(format!("Shutdown service: {}", s.name));
+            }
+            Err((s, e)) => {
+              crate::ui::system_message(format!("Could not stop service [{}]: {}", s.name, e));
+            }
+          });
         task_running = true;
         continue;
       }

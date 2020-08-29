@@ -79,3 +79,27 @@ impl ServiceLauncher {
     ServiceLauncher { services }
   }
 }
+
+pub struct ServiceTerminator {
+  services: Vec<Service>,
+}
+
+impl Iterator for ServiceTerminator {
+  type Item = Result<Service, (Service, std::io::Error)>;
+
+  fn next(&mut self) -> Option<Result<Service, (Service, std::io::Error)>> {
+    match self.services.pop() {
+      Some(service) => match service.stop() {
+        Ok(_) => Some(Ok(service)),
+        Err(e) => Some(Err((service, e))),
+      },
+      None => None,
+    }
+  }
+}
+
+impl ServiceTerminator {
+  pub fn new(services: Vec<Service>) -> ServiceTerminator {
+    ServiceTerminator { services }
+  }
+}

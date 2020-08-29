@@ -46,6 +46,20 @@ impl Supervisor {
     crate::service::ServiceLauncher::new(services)
   }
 
+  /// Returns an iterator that will run all services that a component depends on.
+  pub fn shutdown_component_services(
+    &self,
+    component: &Component,
+  ) -> crate::service::ServiceTerminator {
+    let services = component
+      .services
+      .iter()
+      .map(|sn| self.project.service_by_name(sn))
+      .flatten()
+      .collect();
+    crate::service::ServiceTerminator::new(services)
+  }
+
   /// Runs a single command for a task. This is a blocking operation
   /// tasks are not run in parallel.
   pub fn run_task_command(&self, task: &Task, cmd: String) {
@@ -370,12 +384,6 @@ impl ComponentEvent {
       body: ComponentEventBody::ServiceStart { service_name },
     }
   }
-  // pub fn service_shutdown(component: Component, service_name: String) -> Self {
-  //   ComponentEvent {
-  //     component,
-  //     body: ComponentEventBody::ServiceShutdown { service_name },
-  //   }
-  // }
 }
 
 /// Expands a string using environment variables.
