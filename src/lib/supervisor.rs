@@ -54,7 +54,8 @@ impl Supervisor {
     root_path.push(expand_env(task.path.to_str().unwrap()));
     let mut env: HashMap<_, _> = std::env::vars().collect();
     env.extend(task.env.clone());
-    let env_vars: Vec<(String, String)> = env.into_iter().map(|(k, v)| (k, v)).collect();
+    let env_vars: Vec<(String, String)> =
+      env.into_iter().map(|(k, v)| (k, expand_env(&v))).collect();
     ui::system_message(cmd.clone());
     let stream = Exec::shell(cmd)
       .env_extend(&env_vars[..])
@@ -114,7 +115,8 @@ impl Supervisor {
       let mut env: HashMap<_, _> = std::env::vars().collect();
       env.extend(component.env.clone());
       env.extend(extra_env);
-      let env_vars: Vec<(String, String)> = env.into_iter().map(|(k, v)| (k, v)).collect();
+      let env_vars: Vec<(String, String)> =
+        env.into_iter().map(|(k, v)| (k, expand_env(&v))).collect();
       root_path.push(expand_env(component.get_path().to_str().unwrap()));
       // Create the execution command and shell
       let exec = Exec::shell(component.start.clone())
