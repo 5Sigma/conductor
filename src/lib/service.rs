@@ -46,25 +46,36 @@ impl Service {
   }
 }
 
-#[cfg(not(target_os = "windows"))]
 fn start_container(name: &str) -> io::Result<String> {
   let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
   docker.start_container(name)
 }
 
-#[cfg(not(target_os = "windows"))]
 fn stop_container(name: &str) -> io::Result<String> {
   let mut docker = Docker::connect("unix:///var/run/docker.sock")?;
   docker.stop_container(name)
 }
 
-#[cfg(target_os = "windows")]
-fn start_container(name: &str) -> io::Result<String> {
-  Ok("".into())
+pub struct ServiceLauncher {
+  services: Vec<Service>,
 }
 
-#[cfg(target_os = "windows")]
-fn stop_container(name: &str) -> io::Result<String> {
-  ui::system_error("Services are not supported on windows".into());
-  Ok("".into())
+impl Iterator for ServiceLauncher {
+  type Item = Result<Service, (Service, std::io::Error)>;
+
+  fn next(&mut self) -> Option<Result<Service, (Service, std::io::Error)>> {
+    match self.services.pop() {
+      Some(service) => match service.start() {
+        Ok(_) => Some(Ok(service)),
+        Err(e) => Some(Err((service, e))),
+      },
+      None => None,
+    }
+  }
+}
+
+impl ServiceLauncher {
+  pub fn new(services: Vec<Service>) -> ServiceLauncher {
+    ServiceLauncher { services }
+  }
 }

@@ -1,0 +1,33 @@
+name: TestProject
+services:
+  - name: mysql
+groups:
+  - name: testgroup
+    components:
+      - test
+      - long
+    env:
+      E_VAR: group level var
+components:
+  - name: test
+    retry: false
+    env: 
+      E_VAR: component level var
+    tags:
+      - test
+    path: .
+    services:
+      - mysql
+    start: echo $E_VAR
+    tasks:
+      test_task:
+        - touch test.txt
+        - echo "test" >> test.txt
+        - cat test.txt
+        - rm test.txt
+  - name: long
+    retry: false
+    path: ./
+    tags:
+    - long
+    start: sleep 10

@@ -1,9 +1,12 @@
 use clap::{App, Arg, SubCommand};
-use conductor::{setup_project, ui, Project};
+use conductor::{ui, Project};
+// use pty::fork::Fork;
 use std::env;
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+  // Fork::from_ptmx().unwrap();
+
   let matches = handle_cli()?;
   if let Err(e) = run(matches) {
     println!("Error: {}", e)
@@ -28,7 +31,7 @@ fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::err
   }
   .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "config not found"))?;
   let mut project = Project::load(&config_fp)?;
-  let mut root_path = config_fp.clone();
+  let mut root_path = config_fp;
   root_path.pop();
 
   // collect tags
@@ -38,12 +41,15 @@ fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::err
   };
   project.filter_tags(&tags);
 
-  if let Ok(_) = project.run_names(vec![matches.subcommand().0.to_string()]) {
+  if project
+    .run_names(vec![matches.subcommand().0.to_string()])
+    .is_ok()
+  {
     return Ok(());
   }
 
   match matches.subcommand() {
-    ("setup", _) => setup_project(&project, &root_path),
+    ("setup", _) => project.setup(),
     ("run", Some(m)) => {
       let component_names: Vec<String> = m
         .values_of("component")
@@ -56,14 +62,16 @@ fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::err
         let _ = project.run_names(component_names);
         return Ok(());
       } else {
-        if project.components.len() == 0 {
+        if project.components.is_empty() {
           ui::system_error("No components to run".into());
           return Ok(());
         }
+        project.filter_default();
         project.run();
       }
     }
     _ => {
+      project.filter_default();
       project.run();
     }
   };
@@ -168,26 +176,36 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
     None => args,
     Some(local_config_fp) => {
       let project = Project::load(&local_config_fp)?;
-      let cmp_commands: Vec<App> = project
-        .components
-        .iter()
-        .map(|c| {
+
+      let mut cmds: Vec<App> = vec![];
+
+      for c in project.components.iter() {
+        cmds.push(
           SubCommand::with_name(&*c.name)
             .about("Run component")
-            .display_order(10)
-        })
-        .collect();
-      let args = args.subcommands(cmp_commands);
-      let group_commands: Vec<App> = project
-        .groups
-        .iter()
-        .map(|g| {
+            .display_order(10),
+        );
+      }
+
+      for g in project.groups.iter() {
+        cmds.push(
           SubCommand::with_name(&*g.name)
             .about("Run component group")
-            .display_order(10)
-        })
-        .collect();
-      args.subcommands(group_commands)
+            .display_order(10),
+        );
+      }
+
+      for component in project.components {
+        for task in component.tasks.keys() {
+          cmds.push(
+            SubCommand::with_name(&format!("{}:{}", &component.name, &task))
+              .about("Run component task")
+              .display_order(10),
+          );
+        }
+      }
+
+      args.subcommands(cmds)
     }
   };
   Ok(args.get_matches())
