@@ -1,5 +1,4 @@
 use crate::git;
-use crate::Command;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,12 +25,14 @@ impl Default for TerminalColor {
 pub struct Component {
   pub name: String,
   pub path: Option<String>,
+  pub keep_alive: bool,
   pub color: TerminalColor,
   pub env: HashMap<String, String>,
+  pub tasks: HashMap<String, Vec<String>>,
   pub repo: Option<String>,
   pub delay: Option<u64>,
-  pub start: Command,
-  pub init: Vec<Command>,
+  pub start: String,
+  pub init: Vec<String>,
   pub tags: Vec<String>,
   pub retry: bool,
   pub default: bool,
@@ -45,20 +46,25 @@ impl Default for Component {
       default: true,
       path: None,
       env: HashMap::new(),
+      tasks: HashMap::new(),
       repo: None,
       color: TerminalColor::Yellow,
       delay: None,
-      start: Command::default(),
+      start: "".into(),
       tags: vec![],
       init: vec![],
-      retry: true,
+      retry: false,
+      keep_alive: false,
       services: vec![],
     }
   }
 }
 
 impl Component {
-  pub fn has_tag(&self, tags: &[&str]) -> bool {
+  pub fn has_tags(&self, tags: &[&str]) -> bool {
+    if tags.is_empty() {
+      return true;
+    }
     self.tags.iter().any(|a| tags.iter().any(|b| a == b))
   }
 

@@ -17,16 +17,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [linux, macos, windows]
+        build: [linux, macos]
         include:
           - build: linux
             os: ubuntu-latest
             rust: stable
           - build: macos
             os: macos-latest
-            rust: stable
-          - build: windows
-            os: windows-latest
             rust: stable
 
     steps:
@@ -53,10 +50,6 @@ jobs:
     - name: Create archive for Linux
       run: 7z a -ttar -so -an ./target/release/${{ env.RELEASE_BIN }} ${{ env.RELEASE_ADDS }} | 7z a -si ./artifacts/${{ env.RELEASE_BIN }}-linux-x86_64.tar.gz
       if: matrix.os == 'ubuntu-latest'
-
-    - name: Create archive for Windows
-      run: 7z a -tzip ./artifacts/${{ env.RELEASE_BIN }}-windows-x86_64.zip ./target/release/${{ env.RELEASE_BIN }}.exe ${{ env.RELEASE_ADDS }}
-      if: matrix.os == 'windows-latest'
 
     - name: Install p7zip
       # 7Zip not available on MacOS, install p7zip via homebrew.
@@ -92,20 +85,7 @@ jobs:
         release_name: Release ${{ github.ref }}
         draft: false
         prerelease: false
-    - name: Download Windows Artifact
-      uses: actions/download-artifact@v1.0.0
-      with:
-        name: Windows
-        path: windows
-    - name: Attach Windows Binary
-      id: upload-release-asset-windows 
-      uses: actions/upload-release-asset@v1
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: windows/${{ env.RELEASE_BIN }}-windows-x86_64.zip
-        asset_name: conductor-windows.zip
-        asset_content_type: application/zip
-    - name: Download Windows Artifact
+    - name: Download Linux Artifact
       uses: actions/download-artifact@v1.0.0
       with:
         name: Linux

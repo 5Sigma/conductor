@@ -1,3 +1,4 @@
+use crate::task::Task;
 use crate::{Component, TerminalColor};
 use ansi_term::Colour::*;
 
@@ -15,6 +16,13 @@ pub fn system_error(str: String) {
   let msg = Red.bold().paint(str);
 
   println!("{} {} {}", l_bracket, msg, r_bracket);
+}
+
+pub fn task_message(task: &Task, msg: String) {
+  let l_bracket = White.bold().paint("[");
+  let r_bracket = White.bold().paint("]");
+  let name = format!("{}", Purple.bold().paint(&task.name));
+  println!("{}{}{} {}", l_bracket, name, r_bracket, msg);
 }
 
 pub fn component_message(cmp: &Component, msg: String) {
