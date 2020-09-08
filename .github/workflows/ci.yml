@@ -23,8 +23,8 @@ jobs:
             rust: stable
 
     steps:
-    #- uses: actions/checkout@v1
-    #- name: Cache cargo registry
+    - uses: actions/checkout@v1
+    # - name: Cache cargo registry
     #  uses: actions/cache@v1
     #  with:
     #    path: ~/.cargo/registry
