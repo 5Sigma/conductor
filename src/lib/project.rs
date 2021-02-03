@@ -1,4 +1,4 @@
-use crate::supervisor::Supervisor;
+use crate::supervisor::{SupervisedCommand, Supervisor};
 use crate::task::Task;
 use crate::Component;
 use crate::Group;
@@ -16,8 +16,9 @@ pub struct Project {
   pub components: Vec<Component>,
   pub groups: Vec<Group>,
   pub services: Vec<Service>,
-  pub tasks: HashMap<String, Vec<String>>,
+  pub tasks: Vec<Task>,
   pub root_path: PathBuf,
+  pub env: HashMap<String, String>,
 }
 
 impl Project {
@@ -30,7 +31,8 @@ impl Project {
     p.root_path = root_path;
     Ok(p)
   }
-  pub fn service_by_name(&self, name: &str) -> Option<Service> {
+
+  pub(crate) fn service_by_name(&self, name: &str) -> Option<Service> {
     match self
       .services
       .iter()
@@ -41,27 +43,6 @@ impl Project {
     }
   }
 
-  pub fn filter_names(&mut self, names: Vec<String>) {
-    self.components = self
-      .clone()
-      .components
-      .into_iter()
-      .filter(|c| {
-        names
-          .iter()
-          .any(|n| n.to_lowercase() == c.name.to_lowercase())
-      })
-      .collect();
-  }
-
-  pub fn filter_tags(&mut self, tags: &[&str]) {
-    self.components = self
-      .clone()
-      .components
-      .into_iter()
-      .filter(|c| c.has_tags(tags))
-      .collect();
-  }
 
   pub fn filter_default(&mut self) {
     self.components = self
@@ -87,26 +68,66 @@ impl Project {
   }
 
   fn find_component_task(&self, name: &str) -> Option<(Component, Task)> {
-    for c in self.components.iter() {
-      for (task_name, cmds) in c.tasks.clone().into_iter() {
-        if name.to_lowercase() == format!("{}:{}", c.name, task_name).to_lowercase() {
-          return Some((
-            c.clone(),
-            Task::new(name, &c.get_path(), cmds, c.env.clone()),
-          ));
-        }
-      }
-    }
-    None
+    self.components.iter().find_map(|c| {
+      c.tasks
+        .iter()
+        .find(|t| name.to_lowercase() == format!("{}:{}", c.name, t.name).to_lowercase())
+        .map(|t| (c.clone(), t.clone()))
+    })
   }
 
   fn find_project_task(&self, name: &str) -> Option<Task> {
-    for (task_name, cmds) in self.tasks.clone().into_iter() {
-      if name.to_lowercase() == task_name.to_lowercase() {
-        return Some(Task::new(name, &self.root_path, cmds, HashMap::new()));
-      }
-    }
-    None
+    self
+      .tasks
+      .iter()
+      .find(|t| t.name.to_lowercase() == name.to_lowercase())
+      .cloned()
+  }
+
+  fn run_project_task(&self, supr: &Supervisor, task: &Task) -> Result<(), String> {
+    self.run_task_names(supr, &task.dependencies)?;
+    let mut env = self.env.clone();
+    env.extend(task.env.clone());
+    let cmd = SupervisedCommand {
+      commands: task.commands.clone().into(),
+      env,
+      path: task.path.clone().unwrap_or(self.root_path.clone()),
+      color: crate::component::TerminalColor::White,
+      keep_alive: false,
+      name: task.name.clone(),
+      delay: None,
+      retry: false,
+    };
+    supr.run(cmd)?;
+    Ok(())
+  }
+
+  fn run_component_task(
+    &self,
+    supr: &Supervisor,
+    component: &Component,
+    task: &Task,
+  ) -> Result<(), String> {
+    self.run_task_names(supr, &task.dependencies)?;
+    let mut env = self.env.clone();
+    env.extend(component.env.clone());
+    env.extend(task.env.clone());
+    let cmd = SupervisedCommand {
+      commands: task.commands.clone().into(),
+      env,
+      path: task.path.clone().unwrap_or_else(|| {
+        let mut path = self.root_path.clone();
+        path.push(component.get_path());
+        path
+      }),
+      color: crate::component::TerminalColor::White,
+      keep_alive: false,
+      name: format!("{}:{}", component.name, task.name),
+      delay: None,
+      retry: false,
+    };
+    supr.run(cmd)?;
+    Ok(())
   }
 
   pub fn run(&self) {
@@ -117,28 +138,20 @@ impl Project {
     supr.init();
   }
 
-  pub fn run_names(&self, names: Vec<String>) -> Result<(), String> {
-    // If a component was ran we need to invoke Supervisor::init at the end
-    let mut cmp_running = false;
-    // If a task has was ran we wont invoke Supervisor::init but we will still respond
-    // that we have handled the operation so that we dont default to running everything in the project
+  fn run_task_names(&self, supr: &Supervisor, names: &Vec<String>) -> Result<bool, String> {
     let mut task_running = false;
-    let supr = Supervisor::new(self);
-
-    for name in names.iter() {
-      if let Some(task) = self.find_project_task(name) {
-        let t = task.clone();
-        for cmd in task {
-          supr.run_task_command(&t, cmd.clone());
-        }
+    names
+      .iter()
+      .map(|n| self.find_project_task(n))
+      .flatten()
+      .map(|task| {
         task_running = true;
-        continue;
-      }
-    }
+        self.run_project_task(&supr, &task)
+      })
+      .collect::<Result<(), String>>()?;
 
     for name in names.iter() {
       if let Some((component, task)) = self.find_component_task(name) {
-        let t = task.clone();
         supr
           .run_component_services(&component)
           .for_each(|result| match result {
@@ -149,9 +162,7 @@ impl Project {
               crate::ui::system_message(format!("Could not start service [{}]: {}", s.name, e));
             }
           });
-        for cmd in task {
-          supr.run_task_command(&t, cmd.clone());
-        }
+        self.run_component_task(&supr, &component, &task)?;
         supr
           .shutdown_component_services(&component)
           .for_each(|result| match result {
@@ -166,6 +177,17 @@ impl Project {
         continue;
       }
     }
+    Ok(task_running)
+  }
+
+  pub fn run_names(&self, names: Vec<String>) -> Result<(), String> {
+    // If a component was ran we need to invoke Supervisor::init at the end
+    let mut cmp_running = false;
+    // If a task has was ran we wont invoke Supervisor::init but we will still respond
+    // that we have handled the operation so that we dont default to running everything in the project
+    let supr = Supervisor::new(self);
+
+    let task_running = self.run_task_names(&supr, &names)?;
 
     for name in names.iter() {
       if let Some(component) = self.find_component(name) {
@@ -185,6 +207,7 @@ impl Project {
         }
       }
     }
+
     if cmp_running {
       supr.init();
     }
@@ -204,11 +227,17 @@ impl Project {
       }
       let mut cmp_path = self.root_path.clone();
       cmp_path.push(cmp.get_path());
-      let task = Task::new(&cmp.name, &cmp_path, cmp.init.clone(), cmp.env.clone());
+      let task = Task {
+        name: cmp.name.clone(),
+        path: Some(cmp_path.clone()),
+        commands: cmp.init.clone().into(),
+        env: cmp.env.clone(),
+        ..Task::default()
+      };
       match cmp.clone_repo(&cmp_path) {
         Ok(_) => {
           crate::ui::system_message(format!("{} cloned", cmp.clone().name));
-          for cmd in &cmp.init {
+          for cmd in &mut cmp.init.clone() {
             supr.run_task_command(&task, cmd.clone());
           }
         }
@@ -226,7 +255,8 @@ impl Default for Project {
       services: vec![],
       groups: vec![],
       root_path: "".into(),
-      tasks: HashMap::new(),
+      tasks: vec![],
+      env: HashMap::new(),
     }
   }
 }

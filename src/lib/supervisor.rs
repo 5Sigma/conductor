@@ -1,8 +1,8 @@
-use crate::task::Task;
+use crate::{component::TerminalColor, task::Task};
 use crate::{ui, Component, Project};
 use crossbeam::channel::{after, unbounded, Receiver, Select, Sender};
 use log::{debug, info, warn};
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, path::PathBuf};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +10,18 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use subprocess::{Exec, Popen, Redirection};
+
+#[derive(Clone)]
+pub struct SupervisedCommand {
+  pub commands: Vec<String>,
+  pub env: HashMap<String, String>,
+  pub path: PathBuf,
+  pub keep_alive: bool,
+  pub color: TerminalColor,
+  pub name: String,
+  pub delay: Option<i64>,
+  pub retry: bool,
+}
 
 struct ReadOutAdapter(Arc<Mutex<Popen>>);
 
@@ -60,11 +72,40 @@ impl Supervisor {
     crate::service::ServiceTerminator::new(services)
   }
 
+  pub fn run(&self, sup_cmd: SupervisedCommand) -> Result<(), String> {
+    let env: HashMap<_, _> = std::env::vars().collect();
+    for cmd in sup_cmd.commands {
+      let mut env = env.clone();
+      env.extend(sup_cmd.env.clone());
+      let env_vars: Vec<(String, String)> =
+        env.into_iter().map(|(k, v)| (k, expand_env(&v))).collect();
+
+      let stream = Exec::shell(cmd)
+        .env_extend(&env_vars)
+        .cwd(sup_cmd.path.clone())
+        .stdout(Redirection::Pipe)
+        .stderr(Redirection::Merge)
+        .stream_stdout()
+        .map_err(|e| e.to_string())?;
+      let reader = BufReader::new(stream);
+      let name = sup_cmd.name.clone();
+      let color = sup_cmd.color.clone();
+      reader.lines().for_each(|line| {
+        if let Ok(body) = line {
+          ui::message(&name, body, &color);
+        }
+      });
+    }
+    Ok(())
+  }
+
   /// Runs a single command for a task. This is a blocking operation
   /// tasks are not run in parallel.
   pub fn run_task_command(&self, task: &Task, cmd: String) {
     let mut root_path = self.project.root_path.clone();
-    root_path.push(expand_env(task.path.to_str().unwrap()));
+    root_path.push(expand_env(
+      task.clone().path.unwrap_or("".into()).to_str().unwrap(),
+    ));
     let mut env: HashMap<_, _> = std::env::vars().collect();
     env.extend(task.env.clone());
     let env_vars: Vec<(String, String)> =
@@ -135,6 +176,7 @@ impl Supervisor {
       let env_vars: Vec<(String, String)> =
         env.into_iter().map(|(k, v)| (k, expand_env(&v))).collect();
       root_path.push(expand_env(component.get_path().to_str().unwrap()));
+      
       // Create the execution command and shell
       let exec = Exec::shell(component.start.clone())
         .env_extend(&env_vars[..])
