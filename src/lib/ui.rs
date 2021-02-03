@@ -25,6 +25,21 @@ pub fn task_message(task: &Task, msg: String) {
   println!("{}{}{} {}", l_bracket, name, r_bracket, msg);
 }
 
+pub fn message(name: &str, msg: String, color: &TerminalColor) {
+  let l_bracket = White.bold().paint("[");
+  let r_bracket = White.bold().paint("]");
+  let name: String = match color {
+    TerminalColor::White => format!("{}", White.bold().paint(name)),
+    TerminalColor::Blue => format!("{}", Blue.bold().paint(name)),
+    TerminalColor::Red => format!("{}", Red.bold().paint(name)),
+    TerminalColor::Green => format!("{}", Green.bold().paint(name)),
+    TerminalColor::Purple => format!("{}", Purple.bold().paint(name)),
+    TerminalColor::Yellow => format!("{}", Yellow.bold().paint(name)),
+    TerminalColor::Cyan => format!("{}", Cyan.bold().paint(name)),
+  };
+  println!("{}{}{} {}", l_bracket, name, r_bracket, msg);
+}
+
 pub fn component_message(cmp: &Component, msg: String) {
   let name: String = match cmp.color {
     TerminalColor::White => format!("{}", White.bold().paint(&cmp.name)),

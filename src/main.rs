@@ -34,13 +34,6 @@ fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::err
   let mut root_path = config_fp;
   root_path.pop();
 
-  // collect tags
-  let tags: Vec<&str> = match matches.value_of("tags") {
-    Some(tags_r) => tags_r.split(',').collect(),
-    _ => vec![],
-  };
-  project.filter_tags(&tags);
-
   if project
     .run_names(vec![matches.subcommand().0.to_string()])
     .is_ok()
@@ -128,26 +121,10 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
         .long("debug")
         .help("Enable debug logging")
     )
-    .arg(
-      Arg::with_name("tags")
-        .short("t")
-        .long("tags")
-        .help("limit the operation to only components with a specific tag")
-        .value_name("TAG1,TAG2")
-        .takes_value(true),
-    )
     .subcommand(
       SubCommand::with_name("setup")
         .about("clone and initialize the project")
         .display_order(1)
-        .arg(
-          Arg::with_name("tags")
-            .short("t")
-            .long("tags")
-            .help("limit the operation to only components with a specific tag")
-            .value_name("TAG1,TAG2")
-            .takes_value(true),
-        )
         .alias("soundcheck")
         .alias("clone"),
     )
@@ -155,14 +132,6 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
       SubCommand::with_name("run")
         .about("Launches all project components.")
         .display_order(1)
-        .arg(
-          Arg::with_name("tags")
-            .short("t")
-            .long("tags")
-            .help("limit the operation to only components with a specific tag")
-            .value_name("TAG1,TAG2")
-            .takes_value(true),
-        )
         .arg(
             Arg::with_name("component")
                 .multiple(true)
@@ -184,9 +153,9 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
         cmds.push(SubCommand::with_name("   ").display_order(1000));
       }
 
-      for (name, _) in project.tasks.iter() {
+      for task in project.tasks.iter() {
         cmds.push(
-          SubCommand::with_name(name)
+          SubCommand::with_name(&task.name)
             .display_order(1001)
             .about("Run project task"),
         );
@@ -221,9 +190,9 @@ fn handle_cli<'a>() -> Result<clap::ArgMatches<'a>, Box<dyn std::error::Error>> 
       }
 
       for component in project.components {
-        for task in component.tasks.keys() {
+        for task in component.tasks {
           cmds.push(
-            SubCommand::with_name(&format!("{}:{}", &component.name, &task))
+            SubCommand::with_name(&format!("{}:{}", &component.name, &task.name))
               .about("Run component task")
               .display_order(1005),
           );
