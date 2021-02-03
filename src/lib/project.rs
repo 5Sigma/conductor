@@ -43,7 +43,6 @@ impl Project {
     }
   }
 
-
   pub fn filter_default(&mut self) {
     self.components = self
       .clone()

@@ -25,7 +25,6 @@ pub fn task_message(task: &Task, msg: String) {
   println!("{}{}{} {}", l_bracket, name, r_bracket, msg);
 }
 
-
 pub fn message(name: &str, msg: String, color: &TerminalColor) {
   let l_bracket = White.bold().paint("[");
   let r_bracket = White.bold().paint("]");

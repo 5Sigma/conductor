@@ -34,7 +34,6 @@ fn run(matches: clap::ArgMatches<'_>) -> Result<(), std::boxed::Box<dyn std::err
   let mut root_path = config_fp;
   root_path.pop();
 
-
   if project
     .run_names(vec![matches.subcommand().0.to_string()])
     .is_ok()

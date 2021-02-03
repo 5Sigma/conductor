@@ -12,7 +12,6 @@ pub use project::Project;
 use service::*;
 pub mod ui;
 
-
 use serde::Deserialize;
 #[derive(Clone, Deserialize, PartialEq, Debug)]
 #[serde(untagged)]
@@ -28,14 +27,13 @@ impl Into<Vec<String>> for Commands {
 }
 
 impl From<Vec<String>> for Commands {
-    fn from(v: Vec<String>) -> Self {
-        Self::Multiple(v)
-    }
+  fn from(v: Vec<String>) -> Self {
+    Self::Multiple(v)
+  }
 }
 
 impl Iterator for Commands {
   type Item = String;
-
 
   fn next(&mut self) -> Option<String> {
     match self {

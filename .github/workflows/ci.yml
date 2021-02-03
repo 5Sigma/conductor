@@ -24,7 +24,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
-    - name: Install Rust (macos)
+    - name: Install Rust
       uses: actions-rs/toolchain@v1.0.6
       with:
         toolchain: nightly
@@ -38,7 +38,7 @@ jobs:
       uses: actions-rs/cargo@v1.0.1
       with:
          command: fmt
-         args: -- check
+         args: -- --check
     - name: Clippy Check
       uses: actions-rs/cargo@v1.0.1
       with:

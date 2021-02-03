@@ -2,13 +2,16 @@ use crate::{component::TerminalColor, task::Task};
 use crate::{ui, Component, Project};
 use crossbeam::channel::{after, unbounded, Receiver, Select, Sender};
 use log::{debug, info, warn};
-use std::{collections::{HashMap, HashSet}, path::PathBuf};
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use std::{
+  collections::{HashMap, HashSet},
+  path::PathBuf,
+};
 use subprocess::{Exec, Popen, Redirection};
 
 #[derive(Clone)]
@@ -176,7 +179,7 @@ impl Supervisor {
       let env_vars: Vec<(String, String)> =
         env.into_iter().map(|(k, v)| (k, expand_env(&v))).collect();
       root_path.push(expand_env(component.get_path().to_str().unwrap()));
-      
+
       // Create the execution command and shell
       let exec = Exec::shell(component.start.clone())
         .env_extend(&env_vars[..])
