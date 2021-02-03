@@ -43,7 +43,7 @@ jobs:
       uses: actions-rs/cargo@v1.0.1
       with:
          command: clippy
-         args: -- all-features
+         args: -- --all-features
     - name: Run tests
       uses: actions-rs/cargo@v1.0.1
       with:
