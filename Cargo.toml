@@ -12,7 +12,7 @@ path="src/lib/mod.rs"
 
 
 [dependencies]
-git2 = "0.13.8"
+git2 = "0.16.1"
 clap = "2.33.0"
 ansi_term = "0.12"
 serde = { version = "1.0.114", features = ["derive"] }
